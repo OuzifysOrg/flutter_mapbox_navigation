@@ -7,6 +7,7 @@ import android.content.IntentFilter
 import android.location.Location
 import android.os.Bundle
 import androidx.appcompat.app.AppCompatActivity
+import androidx.core.content.ContextCompat
 import com.eopeter.fluttermapboxnavigation.FlutterMapboxNavigationPlugin
 import com.eopeter.fluttermapboxnavigation.R
 import com.eopeter.fluttermapboxnavigation.databinding.NavigationActivityBinding
@@ -139,14 +140,22 @@ class NavigationActivity : AppCompatActivity() {
             }
         }
 
-        registerReceiver(
+        // PATCHED (Android 14 / API 34+): registerReceiver must declare export state.
+        // These are internal app broadcasts (not system), so RECEIVER_NOT_EXPORTED.
+        // ContextCompat is version-safe (flag ignored on older APIs). Without this the
+        // nav Activity crashes with a SecurityException the instant it launches.
+        ContextCompat.registerReceiver(
+            this,
             finishBroadcastReceiver,
-            IntentFilter(NavigationLauncher.KEY_STOP_NAVIGATION)
+            IntentFilter(NavigationLauncher.KEY_STOP_NAVIGATION),
+            ContextCompat.RECEIVER_NOT_EXPORTED
         )
 
-        registerReceiver(
+        ContextCompat.registerReceiver(
+            this,
             addWayPointsBroadcastReceiver,
-            IntentFilter(NavigationLauncher.KEY_ADD_WAYPOINTS)
+            IntentFilter(NavigationLauncher.KEY_ADD_WAYPOINTS),
+            ContextCompat.RECEIVER_NOT_EXPORTED
         )
 
         // TODO set the style Uri
