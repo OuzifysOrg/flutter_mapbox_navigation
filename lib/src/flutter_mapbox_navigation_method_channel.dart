@@ -21,7 +21,11 @@ class MethodChannelFlutterMapboxNavigation
   final eventChannel = const EventChannel('flutter_mapbox_navigation/events');
 
   late StreamSubscription<RouteEvent> _routeEventSubscription;
-  late ValueSetter<RouteEvent>? _onRouteEvent;
+  // NOT `late`: this is only assigned by registerRouteEventListener, which is
+  // optional, so _onProgressData's `if (_onRouteEvent != null)` guard has to be
+  // able to *read* it. Reading an unassigned `late` field throws, which made
+  // that guard unreachable and every route event a LateInitializationError.
+  ValueSetter<RouteEvent>? _onRouteEvent;
 
   @override
   Future<String?> getPlatformVersion() async {
