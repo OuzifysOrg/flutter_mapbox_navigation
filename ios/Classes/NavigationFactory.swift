@@ -65,7 +65,10 @@ public class NavigationFactory : NSObject, FlutterStreamHandler
     func startFreeDrive(arguments: NSDictionary?, result: @escaping FlutterResult)
     {
         let freeDriveViewController = FreeDriveViewController()
-        let flutterViewController = UIApplication.shared.delegate?.window??.rootViewController as! FlutterViewController
+        let rootVC = UIApplication.shared.delegate?.window??.rootViewController
+            ?? UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.flatMap { $0.windows }.first(where: { $0.isKeyWindow })?.rootViewController
+            ?? UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.flatMap { $0.windows }.first?.rootViewController
+        guard let flutterViewController = rootVC as? FlutterViewController else { return }
         flutterViewController.present(freeDriveViewController, animated: true, completion: nil)
     }
     
@@ -128,7 +131,10 @@ public class NavigationFactory : NSObject, FlutterStreamHandler
                     strongSelf._routes = routes
                     let routeOptionsView = RouteOptionsViewController(routes: routes, options: strongSelf._options!)
                     
-                    let flutterViewController = UIApplication.shared.delegate?.window??.rootViewController as! FlutterViewController
+                    let rootVC = UIApplication.shared.delegate?.window??.rootViewController
+            ?? UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.flatMap { $0.windows }.first(where: { $0.isKeyWindow })?.rootViewController
+            ?? UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.flatMap { $0.windows }.first?.rootViewController
+        guard let flutterViewController = rootVC as? FlutterViewController else { return }
                     flutterViewController.present(routeOptionsView, animated: true, completion: nil)
                 }
                 else
@@ -169,14 +175,25 @@ public class NavigationFactory : NSObject, FlutterStreamHandler
             self._navigationViewController = NavigationViewController(for: routeResponse, routeIndex: 0, routeOptions: options, navigationOptions: navOptions)
             self._navigationViewController!.modalPresentationStyle = .fullScreen
             self._navigationViewController!.delegate = self
-            self._navigationViewController!.navigationMapView!.localizeLabels()
+            // PATCHED: navigationMapView is nil until the view controller's view
+            // loads (Mapbox Nav SDK 2.21). Force-unwrapping it here crashed the app
+            // the instant guidance started. Optional-chain it — label localization
+            // is cosmetic and safely skipped if the map view isn't ready yet.
+            self._navigationViewController!.navigationMapView?.localizeLabels()
             self._navigationViewController!.showsReportFeedback = _showReportFeedbackButton
             self._navigationViewController!.showsEndOfRouteFeedback = _showEndOfRouteFeedback
         }
-        let flutterViewController = UIApplication.shared.delegate?.window??.rootViewController as! FlutterViewController
+        // PATCHED: scene-based apps (FlutterSceneDelegate) keep the window on the
+        // UIWindowScene, so UIApplication.shared.delegate?.window is nil and the old
+        // `as! FlutterViewController` force-cast crashed. Fall back to the active
+        // scene's key window.
+        let rootVC = UIApplication.shared.delegate?.window??.rootViewController
+            ?? UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.flatMap { $0.windows }.first(where: { $0.isKeyWindow })?.rootViewController
+            ?? UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.flatMap { $0.windows }.first?.rootViewController
+        guard let flutterViewController = rootVC as? FlutterViewController else { return }
         flutterViewController.present(self._navigationViewController!, animated: true, completion: nil)
     }
-    
+
     func setNavigationOptions(wayPoints: [Waypoint]) {
         var mode: ProfileIdentifier = .automobileAvoidingTraffic
         
