@@ -1,7 +1,7 @@
 import Foundation
 import MapboxDirections
-import MapboxNavigation
-import MapboxCoreNavigation
+import MapboxNavigationUIKit
+import MapboxNavigationCore
 
 public class MapBoxRouteProgressEvent : Codable
 {

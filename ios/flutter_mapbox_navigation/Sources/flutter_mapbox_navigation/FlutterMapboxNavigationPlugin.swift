@@ -2,8 +2,8 @@ import Flutter
 import UIKit
 import MapboxMaps
 import MapboxDirections
-import MapboxCoreNavigation
-import MapboxNavigation
+import MapboxNavigationCore
+import MapboxNavigationUIKit
 
 public class FlutterMapboxNavigationPlugin: NavigationFactory, FlutterPlugin {
   public static func register(with registrar: FlutterPluginRegistrar) {
@@ -20,7 +20,9 @@ public class FlutterMapboxNavigationPlugin: NavigationFactory, FlutterPlugin {
   }
 
     public func handle(_ call: FlutterMethodCall, result: @escaping FlutterResult) {
-
+        // Flutter method calls arrive on the platform (main) thread; the v3
+        // provider surface is @MainActor, so assert that isolation here once.
+        MainActor.assumeIsolated {
         let arguments = call.arguments as? NSDictionary
 
         if(call.method == "getPlatformVersion")
@@ -59,7 +61,7 @@ public class FlutterMapboxNavigationPlugin: NavigationFactory, FlutterPlugin {
         {
             result("Method is Not Implemented");
         }
-
+        }
     }
 
 }
