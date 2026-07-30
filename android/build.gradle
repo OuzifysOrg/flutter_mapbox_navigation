@@ -2,7 +2,7 @@ group 'com.eopeter.fluttermapboxnavigation'
 version '1.0-SNAPSHOT'
 
 buildscript {
-    ext.kotlin_version = '1.7.10'
+    ext.kotlin_version = '1.9.24'
     ext.android_gradle_version = '7.4.2'
     repositories {
         google()
@@ -61,7 +61,8 @@ android {
         main.java.srcDirs += 'src/main/kotlin'
     }
     defaultConfig {
-        minSdkVersion 21
+        // Nav SDK v3 needs 23; the RevBase app is 24 anyway.
+        minSdkVersion 23
         targetSdkVersion 33
         multiDexEnabled true
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
@@ -73,12 +74,13 @@ android {
     }
 
     compileOptions {
-        sourceCompatibility JavaVersion.VERSION_1_8
-        targetCompatibility JavaVersion.VERSION_1_8
+        // Maps SDK v11 / Nav SDK v3 artifacts target newer bytecode than 1.8.
+        sourceCompatibility JavaVersion.VERSION_11
+        targetCompatibility JavaVersion.VERSION_11
     }
 
     kotlinOptions {
-        jvmTarget = '1.8'
+        jvmTarget = '11'
     }
 
     buildFeatures{
@@ -87,10 +89,13 @@ android {
 }
 
 dependencies {
-    // Mapbox Navigation SDK
-    implementation "com.mapbox.navigation:copilot:2.16.0"
-    implementation "com.mapbox.navigation:ui-app:2.16.0"
-    implementation "com.mapbox.navigation:ui-dropin:2.16.0"
+    // Mapbox Navigation SDK v3 (modular — v2's single artifact and its Drop-In
+    // UI no longer exist; the UI is built from components in this plugin).
+    implementation "com.mapbox.navigationcore:navigation:3.27.0"
+    implementation "com.mapbox.navigationcore:ui-maps:3.27.0"
+    implementation "com.mapbox.navigationcore:ui-components:3.27.0"
+    implementation "com.mapbox.navigationcore:tripdata:3.27.0"
+    implementation "com.mapbox.navigationcore:voice:3.27.0"
     implementation "org.jetbrains.kotlin:kotlin-stdlib-jdk7:$kotlin_version"
     implementation 'com.jakewharton.timber:timber:4.7.1'
     implementation 'com.google.code.gson:gson:2.8.9'

@@ -1,11 +1,17 @@
+// The replay trip session (route simulation) is still behind Mapbox's
+// experimental-preview opt-in in v3, exactly as in their own example app.
+@file:OptIn(com.mapbox.navigation.base.ExperimentalPreviewMapboxNavigationAPI::class)
+
 package com.eopeter.fluttermapboxnavigation.activity
 
+import android.annotation.SuppressLint
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
-import android.location.Location
+import android.content.res.Configuration
 import android.os.Bundle
+import android.view.View
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
 import com.eopeter.fluttermapboxnavigation.FlutterMapboxNavigationPlugin
@@ -15,142 +21,395 @@ import com.eopeter.fluttermapboxnavigation.models.MapBoxEvents
 import com.eopeter.fluttermapboxnavigation.models.MapBoxRouteProgressEvent
 import com.eopeter.fluttermapboxnavigation.models.Waypoint
 import com.eopeter.fluttermapboxnavigation.models.WaypointSet
-import com.eopeter.fluttermapboxnavigation.utilities.CustomInfoPanelEndNavButtonBinder
-import com.eopeter.fluttermapboxnavigation.utilities.PluginUtilities
 import com.eopeter.fluttermapboxnavigation.utilities.PluginUtilities.Companion.sendEvent
 import com.google.gson.Gson
 import com.mapbox.api.directions.v5.models.DirectionsRoute
 import com.mapbox.api.directions.v5.models.RouteOptions
+import com.mapbox.bindgen.Expected
+import com.mapbox.common.location.Location
 import com.mapbox.geojson.Point
-import com.mapbox.maps.MapView
-import com.mapbox.maps.Style
-import com.mapbox.maps.plugin.gestures.OnMapLongClickListener
+import com.mapbox.maps.EdgeInsets
+import com.mapbox.maps.ImageHolder
+import com.mapbox.maps.plugin.LocationPuck2D
+import com.mapbox.maps.plugin.animation.camera
 import com.mapbox.maps.plugin.gestures.gestures
+import com.mapbox.maps.plugin.locationcomponent.location
 import com.mapbox.navigation.base.extensions.applyDefaultNavigationOptions
 import com.mapbox.navigation.base.extensions.applyLanguageAndVoiceUnitOptions
+import com.mapbox.navigation.base.formatter.DistanceFormatterOptions
 import com.mapbox.navigation.base.options.NavigationOptions
 import com.mapbox.navigation.base.route.NavigationRoute
 import com.mapbox.navigation.base.route.NavigationRouterCallback
 import com.mapbox.navigation.base.route.RouterFailure
-import com.mapbox.navigation.base.route.RouterOrigin
 import com.mapbox.navigation.base.trip.model.RouteLegProgress
 import com.mapbox.navigation.base.trip.model.RouteProgress
+import com.mapbox.navigation.core.MapboxNavigation
 import com.mapbox.navigation.core.arrival.ArrivalObserver
 import com.mapbox.navigation.core.directions.session.RoutesObserver
+import com.mapbox.navigation.core.formatter.MapboxDistanceFormatter
 import com.mapbox.navigation.core.lifecycle.MapboxNavigationApp
-import com.mapbox.navigation.core.trip.session.BannerInstructionsObserver
+import com.mapbox.navigation.core.lifecycle.MapboxNavigationObserver
+import com.mapbox.navigation.core.lifecycle.requireMapboxNavigation
+import com.mapbox.navigation.core.replay.route.ReplayProgressObserver
+import com.mapbox.navigation.core.replay.route.ReplayRouteMapper
 import com.mapbox.navigation.core.trip.session.LocationMatcherResult
 import com.mapbox.navigation.core.trip.session.LocationObserver
 import com.mapbox.navigation.core.trip.session.OffRouteObserver
 import com.mapbox.navigation.core.trip.session.RouteProgressObserver
 import com.mapbox.navigation.core.trip.session.VoiceInstructionsObserver
-import com.mapbox.navigation.dropin.map.MapViewObserver
-import com.mapbox.navigation.dropin.navigationview.NavigationViewListener
-import com.mapbox.navigation.utils.internal.ifNonNull
+import com.mapbox.navigation.tripdata.maneuver.api.MapboxManeuverApi
+import com.mapbox.navigation.tripdata.progress.api.MapboxTripProgressApi
+import com.mapbox.navigation.tripdata.progress.model.DistanceRemainingFormatter
+import com.mapbox.navigation.tripdata.progress.model.EstimatedTimeToArrivalFormatter
+import com.mapbox.navigation.tripdata.progress.model.PercentDistanceTraveledFormatter
+import com.mapbox.navigation.tripdata.progress.model.TimeRemainingFormatter
+import com.mapbox.navigation.tripdata.progress.model.TripProgressUpdateFormatter
+import com.mapbox.navigation.base.TimeFormat
+import com.mapbox.navigation.ui.base.util.MapboxNavigationConsumer
+import com.mapbox.navigation.ui.maps.NavigationStyles
+import com.mapbox.navigation.ui.maps.camera.NavigationCamera
+import com.mapbox.navigation.ui.maps.camera.data.MapboxNavigationViewportDataSource
+import com.mapbox.navigation.ui.maps.camera.lifecycle.NavigationBasicGesturesHandler
+import com.mapbox.navigation.ui.maps.camera.state.NavigationCameraState
+import com.mapbox.navigation.ui.maps.camera.transition.NavigationCameraTransitionOptions
+import com.mapbox.navigation.ui.maps.location.NavigationLocationProvider
+import com.mapbox.navigation.ui.maps.route.arrow.api.MapboxRouteArrowApi
+import com.mapbox.navigation.ui.maps.route.arrow.api.MapboxRouteArrowView
+import com.mapbox.navigation.ui.maps.route.arrow.model.RouteArrowOptions
+import com.mapbox.navigation.ui.maps.route.line.api.MapboxRouteLineApi
+import com.mapbox.navigation.ui.maps.route.line.api.MapboxRouteLineView
+import com.mapbox.navigation.ui.maps.route.line.model.MapboxRouteLineApiOptions
+import com.mapbox.navigation.ui.maps.route.line.model.MapboxRouteLineViewOptions
+import com.mapbox.navigation.voice.api.MapboxSpeechApi
+import com.mapbox.navigation.voice.api.MapboxVoiceInstructionsPlayer
+import com.mapbox.navigation.voice.model.SpeechAnnouncement
+import com.mapbox.navigation.voice.model.SpeechError
+import com.mapbox.navigation.voice.model.SpeechValue
+import com.mapbox.navigation.voice.model.SpeechVolume
 
+/**
+ * Full-screen turn-by-turn on Navigation SDK v3.
+ *
+ * v2 delegated the whole screen to Drop-In UI (`NavigationView`), which does not
+ * exist in v3 — this activity now assembles the same experience from v3's
+ * modular pieces (route line, navigation camera, maneuver banner, trip
+ * progress, voice), modelled directly on Mapbox's own TurnByTurnExperience
+ * example. **The Flutter-facing contract is unchanged**: same intent extras,
+ * same broadcasts, same event stream (ROUTE_BUILDING/BUILT/…, PROGRESS_CHANGE,
+ * NAVIGATION_RUNNING/CANCELLED, ON_ARRIVAL).
+ */
 class NavigationActivity : AppCompatActivity() {
+
+    private lateinit var binding: NavigationActivityBinding
+
     private var finishBroadcastReceiver: BroadcastReceiver? = null
     private var addWayPointsBroadcastReceiver: BroadcastReceiver? = null
     private var points: MutableList<Waypoint> = mutableListOf()
-    private var waypointSet: WaypointSet = WaypointSet()
-    private var canResetRoute: Boolean = false
-    private var accessToken: String? = null
-    private var lastLocation: Location? = null
     private var isNavigationInProgress = false
 
-    private val navigationStateListener = object : NavigationViewListener() {
-        override fun onFreeDrive() {
+    // v3 components
+    private lateinit var viewportDataSource: MapboxNavigationViewportDataSource
+    private lateinit var navigationCamera: NavigationCamera
+    private lateinit var maneuverApi: MapboxManeuverApi
+    private lateinit var tripProgressApi: MapboxTripProgressApi
+    private lateinit var routeLineApi: MapboxRouteLineApi
+    private lateinit var routeLineView: MapboxRouteLineView
+    private val routeArrowApi: MapboxRouteArrowApi = MapboxRouteArrowApi()
+    private lateinit var routeArrowView: MapboxRouteArrowView
+    private lateinit var speechApi: MapboxSpeechApi
+    private lateinit var voiceInstructionsPlayer: MapboxVoiceInstructionsPlayer
+    private val navigationLocationProvider = NavigationLocationProvider()
+    private val replayRouteMapper = ReplayRouteMapper()
+    private lateinit var replayProgressObserver: ReplayProgressObserver
 
+    private val pixelDensity get() = resources.displayMetrics.density
+    private val overviewPadding: EdgeInsets by lazy {
+        EdgeInsets(140.0 * pixelDensity, 40.0 * pixelDensity, 120.0 * pixelDensity, 40.0 * pixelDensity)
+    }
+    private val followingPadding: EdgeInsets by lazy {
+        EdgeInsets(180.0 * pixelDensity, 40.0 * pixelDensity, 150.0 * pixelDensity, 40.0 * pixelDensity)
+    }
+
+    private var isVoiceInstructionsMuted = !FlutterMapboxNavigationPlugin.voiceInstructionsEnabled
+        set(value) {
+            field = value
+            if (value) {
+                binding.soundButton.muteAndExtend(BUTTON_ANIMATION_DURATION)
+                voiceInstructionsPlayer.volume(SpeechVolume(0f))
+            } else {
+                binding.soundButton.unmuteAndExtend(BUTTON_ANIMATION_DURATION)
+                voiceInstructionsPlayer.volume(SpeechVolume(1f))
+            }
         }
 
-        override fun onDestinationPreview() {
+    // ---- Observers -----------------------------------------------------------
 
-        }
+    private val locationObserver = object : LocationObserver {
+        var firstLocationUpdateReceived = false
 
-        override fun onRoutePreview() {
+        override fun onNewRawLocation(rawLocation: Location) {}
 
-        }
-
-        override fun onActiveNavigation() {
-            isNavigationInProgress = true
-        }
-
-        override fun onArrival() {
-
+        override fun onNewLocationMatcherResult(locationMatcherResult: LocationMatcherResult) {
+            val enhancedLocation = locationMatcherResult.enhancedLocation
+            navigationLocationProvider.changePosition(
+                location = enhancedLocation,
+                keyPoints = locationMatcherResult.keyPoints,
+            )
+            viewportDataSource.onLocationChanged(enhancedLocation)
+            viewportDataSource.evaluate()
+            if (!firstLocationUpdateReceived) {
+                firstLocationUpdateReceived = true
+                navigationCamera.requestNavigationCameraToOverview(
+                    stateTransitionOptions = NavigationCameraTransitionOptions.Builder()
+                        .maxDuration(0)
+                        .build()
+                )
+            }
         }
     }
 
+    private val routeProgressObserver = RouteProgressObserver { routeProgress ->
+        viewportDataSource.onRouteProgressChanged(routeProgress)
+        viewportDataSource.evaluate()
+
+        binding.mapView.mapboxMap.style?.let { style ->
+            routeArrowView.renderManeuverUpdate(
+                style,
+                routeArrowApi.addUpcomingManeuverArrow(routeProgress)
+            )
+        }
+
+        val maneuvers = maneuverApi.getManeuvers(routeProgress)
+        maneuvers.fold(
+            { /* no maneuver data for this tick — keep the last banner */ },
+            {
+                binding.maneuverView.visibility = View.VISIBLE
+                binding.maneuverView.renderManeuvers(maneuvers)
+            }
+        )
+
+        binding.tripProgressView.render(tripProgressApi.getTripProgress(routeProgress))
+
+        // Flutter side: progress + the banner text (kept from v2 behaviour).
+        FlutterMapboxNavigationPlugin.distanceRemaining = routeProgress.distanceRemaining
+        FlutterMapboxNavigationPlugin.durationRemaining = routeProgress.durationRemaining
+        sendEvent(MapBoxRouteProgressEvent(routeProgress))
+        routeProgress.bannerInstructions?.primary()?.text()?.let {
+            sendEvent(MapBoxEvents.BANNER_INSTRUCTION, it)
+        }
+    }
+
+    private val routesObserver = RoutesObserver { routeUpdateResult ->
+        if (routeUpdateResult.navigationRoutes.isNotEmpty()) {
+            routeLineApi.setNavigationRoutes(routeUpdateResult.navigationRoutes) { value ->
+                binding.mapView.mapboxMap.style?.apply {
+                    routeLineView.renderRouteDrawData(this, value)
+                }
+            }
+            viewportDataSource.onRouteChanged(routeUpdateResult.navigationRoutes.first())
+            viewportDataSource.evaluate()
+            sendEvent(MapBoxEvents.REROUTE_ALONG)
+        } else {
+            binding.mapView.mapboxMap.style?.let { style ->
+                routeLineApi.clearRouteLine { value ->
+                    routeLineView.renderClearRouteLineValue(style, value)
+                }
+                routeArrowView.render(style, routeArrowApi.clearArrows())
+            }
+            viewportDataSource.clearRouteData()
+            viewportDataSource.evaluate()
+        }
+    }
+
+    private val voiceInstructionsObserver = VoiceInstructionsObserver { voiceInstructions ->
+        sendEvent(MapBoxEvents.SPEECH_ANNOUNCEMENT, voiceInstructions.announcement().toString())
+        speechApi.generate(voiceInstructions, speechCallback)
+    }
+
+    private val speechCallback =
+        MapboxNavigationConsumer<Expected<SpeechError, SpeechValue>> { expected ->
+            expected.fold(
+                { error -> voiceInstructionsPlayer.play(error.fallback, voiceInstructionsPlayerCallback) },
+                { value -> voiceInstructionsPlayer.play(value.announcement, voiceInstructionsPlayerCallback) }
+            )
+        }
+
+    private val voiceInstructionsPlayerCallback =
+        MapboxNavigationConsumer<SpeechAnnouncement> { value -> speechApi.clean(value) }
+
+    private val offRouteObserver = OffRouteObserver { offRoute ->
+        if (offRoute) sendEvent(MapBoxEvents.USER_OFF_ROUTE)
+    }
+
+    private val arrivalObserver = object : ArrivalObserver {
+        override fun onFinalDestinationArrival(routeProgress: RouteProgress) {
+            isNavigationInProgress = false
+            sendEvent(MapBoxEvents.ON_ARRIVAL)
+        }
+
+        override fun onNextRouteLegStart(routeLegProgress: RouteLegProgress) {}
+        override fun onWaypointArrival(routeProgress: RouteProgress) {}
+    }
+
+    private val mapboxNavigation: MapboxNavigation by requireMapboxNavigation(
+        onResumedObserver = object : MapboxNavigationObserver {
+            @SuppressLint("MissingPermission")
+            override fun onAttached(mapboxNavigation: MapboxNavigation) {
+                mapboxNavigation.registerRoutesObserver(routesObserver)
+                mapboxNavigation.registerLocationObserver(locationObserver)
+                mapboxNavigation.registerRouteProgressObserver(routeProgressObserver)
+                mapboxNavigation.registerVoiceInstructionsObserver(voiceInstructionsObserver)
+                mapboxNavigation.registerOffRouteObserver(offRouteObserver)
+                mapboxNavigation.registerArrivalObserver(arrivalObserver)
+
+                if (FlutterMapboxNavigationPlugin.simulateRoute) {
+                    replayProgressObserver = ReplayProgressObserver(mapboxNavigation.mapboxReplayer)
+                    mapboxNavigation.registerRouteProgressObserver(replayProgressObserver)
+                    mapboxNavigation.startReplayTripSession()
+                } else {
+                    mapboxNavigation.startTripSession()
+                }
+            }
+
+            override fun onDetached(mapboxNavigation: MapboxNavigation) {
+                mapboxNavigation.unregisterRoutesObserver(routesObserver)
+                mapboxNavigation.unregisterLocationObserver(locationObserver)
+                mapboxNavigation.unregisterRouteProgressObserver(routeProgressObserver)
+                mapboxNavigation.unregisterVoiceInstructionsObserver(voiceInstructionsObserver)
+                mapboxNavigation.unregisterOffRouteObserver(offRouteObserver)
+                mapboxNavigation.unregisterArrivalObserver(arrivalObserver)
+                if (FlutterMapboxNavigationPlugin.simulateRoute) {
+                    mapboxNavigation.unregisterRouteProgressObserver(replayProgressObserver)
+                    mapboxNavigation.mapboxReplayer.finish()
+                }
+            }
+        },
+        onInitialize = this::initNavigation
+    )
+
+    // ---- Lifecycle -----------------------------------------------------------
+
+    @SuppressLint("MissingPermission")
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setTheme(R.style.Theme_AppCompat_NoActionBar)
         binding = NavigationActivityBinding.inflate(layoutInflater)
         setContentView(binding.root)
-        binding.navigationView.addListener(navigationStateListener)
-        accessToken =
-            PluginUtilities.getResourceFromContext(this.applicationContext, "mapbox_access_token")
 
-        val navigationOptions = NavigationOptions.Builder(this.applicationContext)
-            .accessToken(accessToken)
-            .build()
-
-        MapboxNavigationApp
-            .setup(navigationOptions)
-            .attach(this)
-
-        if (FlutterMapboxNavigationPlugin.longPressDestinationEnabled) {
-            binding.navigationView.registerMapObserver(onMapLongClick)
-            binding.navigationView.customizeViewOptions {
-                enableMapLongClickIntercept = false
+        viewportDataSource = MapboxNavigationViewportDataSource(binding.mapView.mapboxMap)
+        navigationCamera = NavigationCamera(
+            binding.mapView.mapboxMap,
+            binding.mapView.camera,
+            viewportDataSource
+        )
+        binding.mapView.camera.addCameraAnimationsLifecycleListener(
+            NavigationBasicGesturesHandler(navigationCamera)
+        )
+        navigationCamera.registerNavigationCameraStateChangeObserver { state ->
+            when (state) {
+                NavigationCameraState.TRANSITION_TO_FOLLOWING,
+                NavigationCameraState.FOLLOWING -> binding.recenter.visibility = View.INVISIBLE
+                NavigationCameraState.TRANSITION_TO_OVERVIEW,
+                NavigationCameraState.OVERVIEW,
+                NavigationCameraState.IDLE -> binding.recenter.visibility = View.VISIBLE
             }
         }
+        viewportDataSource.overviewPadding = overviewPadding
+        viewportDataSource.followingPadding = followingPadding
 
-        val act = this
-        // Add custom view binders
-        binding.navigationView.customizeViewBinders {
-            infoPanelEndNavigationButtonBinder =
-                CustomInfoPanelEndNavButtonBinder(act)
+        val distanceFormatterOptions = DistanceFormatterOptions.Builder(this).build()
+        maneuverApi = MapboxManeuverApi(MapboxDistanceFormatter(distanceFormatterOptions))
+        tripProgressApi = MapboxTripProgressApi(
+            TripProgressUpdateFormatter.Builder(this)
+                .distanceRemainingFormatter(DistanceRemainingFormatter(distanceFormatterOptions))
+                .timeRemainingFormatter(TimeRemainingFormatter(this))
+                .percentRouteTraveledFormatter(PercentDistanceTraveledFormatter())
+                .estimatedTimeToArrivalFormatter(
+                    EstimatedTimeToArrivalFormatter(this, TimeFormat.NONE_SPECIFIED)
+                )
+                .build()
+        )
+
+        val language = FlutterMapboxNavigationPlugin.navigationLanguage
+        speechApi = MapboxSpeechApi(this, language)
+        voiceInstructionsPlayer = MapboxVoiceInstructionsPlayer(this, language)
+
+        routeLineApi = MapboxRouteLineApi(MapboxRouteLineApiOptions.Builder().build())
+        routeLineView = MapboxRouteLineView(
+            MapboxRouteLineViewOptions.Builder(this)
+                .routeLineBelowLayerId("road-label-navigation")
+                .build()
+        )
+        routeArrowView = MapboxRouteArrowView(RouteArrowOptions.Builder(this).build())
+
+        // Day/night map style: honour the caller's URLs, fall back to the v3
+        // navigation styles (v2's customizeViewOptions is gone with Drop-In).
+        val nightMode = resources.configuration.uiMode and
+            Configuration.UI_MODE_NIGHT_MASK == Configuration.UI_MODE_NIGHT_YES
+        val styleUrl = if (nightMode) {
+            FlutterMapboxNavigationPlugin.mapStyleUrlNight ?: NavigationStyles.NAVIGATION_NIGHT_STYLE
+        } else {
+            FlutterMapboxNavigationPlugin.mapStyleUrlDay ?: NavigationStyles.NAVIGATION_DAY_STYLE
         }
-
-        MapboxNavigationApp.current()?.registerBannerInstructionsObserver(this.bannerInstructionObserver)
-        MapboxNavigationApp.current()?.registerVoiceInstructionsObserver(this.voiceInstructionObserver)
-        MapboxNavigationApp.current()?.registerOffRouteObserver(this.offRouteObserver)
-        MapboxNavigationApp.current()?.registerRoutesObserver(this.routesObserver)
-        MapboxNavigationApp.current()?.registerLocationObserver(locationObserver)
-        MapboxNavigationApp.current()?.registerRouteProgressObserver(routeProgressObserver)
-        MapboxNavigationApp.current()?.registerArrivalObserver(arrivalObserver)
-
-        finishBroadcastReceiver = object : BroadcastReceiver() {
-            override fun onReceive(context: Context, intent: Intent) {
-                finish()
-            }
-        }
-
-        addWayPointsBroadcastReceiver = object : BroadcastReceiver() {
-            override fun onReceive(context: Context, intent: Intent) {
-                //get waypoints
-                val stops = intent.getSerializableExtra("waypoints") as? MutableList<Waypoint>
-                val nextIndex = 1
-                if (stops != null) {
-                    //append to points
-                    if (points.count() >= nextIndex)
-                        points.addAll(nextIndex, stops)
-                    else
-                        points.addAll(stops)
+        binding.mapView.mapboxMap.loadStyle(styleUrl) { style ->
+            routeLineView.initializeLayers(style)
+            if (FlutterMapboxNavigationPlugin.longPressDestinationEnabled) {
+                binding.mapView.gestures.addOnMapLongClickListener { point ->
+                    navigationLocationProvider.lastLocation?.let { last ->
+                        val set = WaypointSet()
+                        set.add(Waypoint(Point.fromLngLat(last.longitude, last.latitude)))
+                        set.add(Waypoint(point))
+                        requestRoutes(set)
+                    }
+                    true
                 }
             }
         }
 
-        // PATCHED (Android 14 / API 34+): registerReceiver must declare export state.
-        // These are internal app broadcasts (not system), so RECEIVER_NOT_EXPORTED.
-        // ContextCompat is version-safe (flag ignored on older APIs). Without this the
-        // nav Activity crashes with a SecurityException the instant it launches.
+        binding.stop.setOnClickListener {
+            cancelNavigation()
+            finish()
+        }
+        binding.recenter.setOnClickListener {
+            navigationCamera.requestNavigationCameraToFollowing()
+            binding.routeOverview.showTextAndExtend(BUTTON_ANIMATION_DURATION)
+        }
+        binding.routeOverview.setOnClickListener {
+            navigationCamera.requestNavigationCameraToOverview()
+            binding.recenter.showTextAndExtend(BUTTON_ANIMATION_DURATION)
+        }
+        binding.soundButton.setOnClickListener {
+            isVoiceInstructionsMuted = !isVoiceInstructionsMuted
+        }
+        if (isVoiceInstructionsMuted) binding.soundButton.mute() else binding.soundButton.unmute()
+
+        // KEPT (Android 14 / API 34+): registerReceiver must declare an export
+        // state or the activity crashes with a SecurityException on launch.
+        // These are internal app broadcasts → RECEIVER_NOT_EXPORTED.
+        finishBroadcastReceiver = object : BroadcastReceiver() {
+            override fun onReceive(context: Context, intent: Intent) {
+                cancelNavigation()
+                finish()
+            }
+        }
+        addWayPointsBroadcastReceiver = object : BroadcastReceiver() {
+            override fun onReceive(context: Context, intent: Intent) {
+                @Suppress("UNCHECKED_CAST", "DEPRECATION")
+                val stops = intent.getSerializableExtra("waypoints") as? MutableList<Waypoint>
+                if (stops != null) {
+                    val set = WaypointSet()
+                    points.addAll(stops)
+                    points.map { set.add(it) }
+                    requestRoutes(set)
+                }
+            }
+        }
         ContextCompat.registerReceiver(
             this,
             finishBroadcastReceiver,
             IntentFilter(NavigationLauncher.KEY_STOP_NAVIGATION),
             ContextCompat.RECEIVER_NOT_EXPORTED
         )
-
         ContextCompat.registerReceiver(
             this,
             addWayPointsBroadcastReceiver,
@@ -158,48 +417,48 @@ class NavigationActivity : AppCompatActivity() {
             ContextCompat.RECEIVER_NOT_EXPORTED
         )
 
-        // TODO set the style Uri
-        var styleUrlDay = FlutterMapboxNavigationPlugin.mapStyleUrlDay
-        var styleUrlNight = FlutterMapboxNavigationPlugin.mapStyleUrlNight
-
-        if (styleUrlDay == null) styleUrlDay = Style.MAPBOX_STREETS
-        if (styleUrlNight == null) styleUrlNight = Style.DARK
-        // set map style
-        binding.navigationView.customizeViewStyles {}
-
-        // set map style
-        binding.navigationView.customizeViewOptions {
-            mapStyleUriDay = styleUrlDay
-            mapStyleUriNight = styleUrlNight
-        }
+        // Touching `mapboxNavigation` initializes MapboxNavigationApp and starts
+        // the trip session (see requireMapboxNavigation above).
+        mapboxNavigation
 
         if (FlutterMapboxNavigationPlugin.enableFreeDriveMode) {
-            binding.navigationView.api.routeReplayEnabled(FlutterMapboxNavigationPlugin.simulateRoute)
-            binding.navigationView.api.startFreeDrive()
+            // Free drive = trip session with no routes; the map follows the puck.
+            sendEvent(MapBoxEvents.NAVIGATION_RUNNING)
             return
         }
 
+        @Suppress("UNCHECKED_CAST", "DEPRECATION")
         val p = intent.getSerializableExtra("waypoints") as? MutableList<Waypoint>
         if (p != null) points = p
+        val waypointSet = WaypointSet()
         points.map { waypointSet.add(it) }
-        requestRoutes(waypointSet)
+        if (!waypointSet.isEmpty) requestRoutes(waypointSet)
+    }
 
+    private fun initNavigation() {
+        MapboxNavigationApp.setup(NavigationOptions.Builder(this).build())
+
+        binding.mapView.location.apply {
+            setLocationProvider(navigationLocationProvider)
+            locationPuck = LocationPuck2D(
+                bearingImage = ImageHolder.from(
+                    com.mapbox.navigation.ui.components.R.drawable.mapbox_navigation_puck_icon
+                )
+            )
+            puckBearingEnabled = true
+            enabled = true
+        }
     }
 
     override fun onDestroy() {
         super.onDestroy()
-        if (FlutterMapboxNavigationPlugin.longPressDestinationEnabled) {
-            binding.navigationView.unregisterMapObserver(onMapLongClick)
-        }
-        binding.navigationView.removeListener(navigationStateListener)
-
-        MapboxNavigationApp.current()?.unregisterBannerInstructionsObserver(this.bannerInstructionObserver)
-        MapboxNavigationApp.current()?.unregisterVoiceInstructionsObserver(this.voiceInstructionObserver)
-        MapboxNavigationApp.current()?.unregisterOffRouteObserver(this.offRouteObserver)
-        MapboxNavigationApp.current()?.unregisterRoutesObserver(this.routesObserver)
-        MapboxNavigationApp.current()?.unregisterLocationObserver(locationObserver)
-        MapboxNavigationApp.current()?.unregisterRouteProgressObserver(routeProgressObserver)
-        MapboxNavigationApp.current()?.unregisterArrivalObserver(arrivalObserver)
+        finishBroadcastReceiver?.let { unregisterReceiver(it) }
+        addWayPointsBroadcastReceiver?.let { unregisterReceiver(it) }
+        maneuverApi.cancel()
+        routeLineApi.cancel()
+        routeLineView.cancel()
+        speechApi.cancel()
+        voiceInstructionsPlayer.shutdown()
     }
 
     fun tryCancelNavigation() {
@@ -209,11 +468,21 @@ class NavigationActivity : AppCompatActivity() {
         }
     }
 
+    private fun cancelNavigation() {
+        mapboxNavigation.setNavigationRoutes(listOf())
+        if (FlutterMapboxNavigationPlugin.simulateRoute) {
+            mapboxNavigation.mapboxReplayer.stop()
+            mapboxNavigation.mapboxReplayer.clearEvents()
+        }
+        tryCancelNavigation()
+    }
+
+    // ---- Routing -------------------------------------------------------------
+
     private fun requestRoutes(waypointSet: WaypointSet) {
         sendEvent(MapBoxEvents.ROUTE_BUILDING)
-        MapboxNavigationApp.current()!!.requestRoutes(
-            routeOptions = RouteOptions
-                .builder()
+        mapboxNavigation.requestRoutes(
+            RouteOptions.builder()
                 .applyDefaultNavigationOptions()
                 .applyLanguageAndVoiceUnitOptions(this)
                 .coordinatesList(waypointSet.coordinatesList())
@@ -226,8 +495,8 @@ class NavigationActivity : AppCompatActivity() {
                 .voiceInstructions(FlutterMapboxNavigationPlugin.voiceInstructionsEnabled)
                 .steps(true)
                 .build(),
-            callback = object : NavigationRouterCallback {
-                override fun onCanceled(routeOptions: RouteOptions, routerOrigin: RouterOrigin) {
+            object : NavigationRouterCallback {
+                override fun onCanceled(routeOptions: RouteOptions, routerOrigin: String) {
                     sendEvent(MapBoxEvents.ROUTE_BUILD_CANCELLED)
                 }
 
@@ -237,202 +506,50 @@ class NavigationActivity : AppCompatActivity() {
 
                 override fun onRoutesReady(
                     routes: List<NavigationRoute>,
-                    routerOrigin: RouterOrigin
+                    routerOrigin: String
                 ) {
-                    sendEvent(
-                        MapBoxEvents.ROUTE_BUILT,
-                        Gson().toJson(routes.map { it.directionsRoute.toJson() })
-                    )
                     if (routes.isEmpty()) {
                         sendEvent(MapBoxEvents.ROUTE_BUILD_NO_ROUTES_FOUND)
                         return
                     }
-                    binding.navigationView.api.routeReplayEnabled(FlutterMapboxNavigationPlugin.simulateRoute)
-                    binding.navigationView.api.startActiveGuidance(routes)
-                }
-            }
-        )
-    }
-
-
-    // MultiWaypoint Navigation
-    private fun addWaypoint(destination: Point, name: String?) {
-        val originLocation = lastLocation
-        val originPoint = originLocation?.let {
-            Point.fromLngLat(it.longitude, it.latitude)
-        } ?: return
-
-        // we always start a route from the current location
-        if (addedWaypoints.isEmpty) {
-            addedWaypoints.add(Waypoint(originPoint))
-        }
-
-        if (!name.isNullOrBlank()) {
-            // When you add named waypoints, the string you use here inside "" would be shown in `Maneuver` and played in `Voice` instructions.
-            // In this example waypoint names will be visible in the logcat.
-            addedWaypoints.add(Waypoint(name, destination))
-        } else {
-            // When you add silent waypoints, make sure it is followed by a regular or named waypoint, otherwise silent waypoint is treated as a regular waypoint
-            addedWaypoints.add(Waypoint(destination, true))
-        }
-
-        // execute a route request
-        // it's recommended to use the
-        // applyDefaultNavigationOptions and applyLanguageAndVoiceUnitOptions
-        // that make sure the route request is optimized
-        // to allow for support of all of the Navigation SDK features
-        MapboxNavigationApp.current()!!.requestRoutes(
-            routeOptions = RouteOptions
-                .builder()
-                .applyDefaultNavigationOptions()
-                .applyLanguageAndVoiceUnitOptions(this)
-                .coordinatesList(addedWaypoints.coordinatesList())
-                .waypointIndicesList(addedWaypoints.waypointsIndices())
-                .waypointNamesList(addedWaypoints.waypointsNames())
-                .alternatives(true)
-                .build(),
-            callback = object : NavigationRouterCallback {
-                override fun onRoutesReady(
-                    routes: List<NavigationRoute>,
-                    routerOrigin: RouterOrigin
-                ) {
                     sendEvent(
                         MapBoxEvents.ROUTE_BUILT,
                         Gson().toJson(routes.map { it.directionsRoute.toJson() })
                     )
-                    binding.navigationView.api.routeReplayEnabled(true)
-                    binding.navigationView.api.startActiveGuidance(routes)
-                }
-
-                override fun onFailure(
-                    reasons: List<RouterFailure>,
-                    routeOptions: RouteOptions
-                ) {
-                    sendEvent(MapBoxEvents.ROUTE_BUILD_FAILED)
-                }
-
-                override fun onCanceled(routeOptions: RouteOptions, routerOrigin: RouterOrigin) {
-                    sendEvent(MapBoxEvents.ROUTE_BUILD_CANCELLED)
+                    setRouteAndStartNavigation(routes)
                 }
             }
         )
     }
 
-    // Resets the current route
-    private fun resetCurrentRoute() {
-//        if (mapboxNavigation.getRoutes().isNotEmpty()) {
-//            mapboxNavigation.setRoutes(emptyList()) // reset route
-//            addedWaypoints.clear() // reset stored waypoints
-//        }
-    }
+    private fun setRouteAndStartNavigation(routes: List<NavigationRoute>) {
+        mapboxNavigation.setNavigationRoutes(routes)
+        isNavigationInProgress = true
 
-    private fun setRouteAndStartNavigation(routes: List<DirectionsRoute>) {
-        // set routes, where the first route in the list is the primary route that
-        // will be used for active guidance
-        // mapboxNavigation.setRoutes(routes)
-    }
+        binding.soundButton.visibility = View.VISIBLE
+        binding.routeOverview.visibility = View.VISIBLE
+        binding.tripProgressCard.visibility = View.VISIBLE
 
-    private fun clearRouteAndStopNavigation() {
-        // clear
-        // mapboxNavigation.setRoutes(listOf())
-    }
+        navigationCamera.requestNavigationCameraToOverview()
 
-
-    /**
-     * Helper class that keeps added waypoints and transforms them to the [RouteOptions] params.
-     */
-    private val addedWaypoints = WaypointSet()
-
-
-    /**
-     * Bindings to the Navigation Activity.
-     */
-    private lateinit var binding: NavigationActivityBinding// MapboxActivityTurnByTurnExperienceBinding
-
-
-    /**
-     * Gets notified with progress along the currently active route.
-     */
-    private val routeProgressObserver = RouteProgressObserver { routeProgress ->
-        //Notify the client
-        val progressEvent = MapBoxRouteProgressEvent(routeProgress)
-        FlutterMapboxNavigationPlugin.distanceRemaining = routeProgress.distanceRemaining
-        FlutterMapboxNavigationPlugin.durationRemaining = routeProgress.durationRemaining
-        sendEvent(progressEvent)
-    }
-
-    private val arrivalObserver: ArrivalObserver = object : ArrivalObserver {
-        override fun onFinalDestinationArrival(routeProgress: RouteProgress) {
-            isNavigationInProgress = false
-            sendEvent(MapBoxEvents.ON_ARRIVAL)
+        if (FlutterMapboxNavigationPlugin.simulateRoute) {
+            startSimulation(routes.first().directionsRoute)
         }
+        sendEvent(MapBoxEvents.NAVIGATION_RUNNING)
+    }
 
-        override fun onNextRouteLegStart(routeLegProgress: RouteLegProgress) {
-
-        }
-
-        override fun onWaypointArrival(routeProgress: RouteProgress) {
-
+    private fun startSimulation(route: DirectionsRoute) {
+        with(mapboxNavigation.mapboxReplayer) {
+            stop()
+            clearEvents()
+            val replayData = replayRouteMapper.mapDirectionsRouteGeometry(route)
+            pushEvents(replayData)
+            seekTo(replayData[0])
+            play()
         }
     }
 
-    /**
-     * Gets notified with location updates.
-     *
-     * Exposes raw updates coming directly from the location services
-     * and the updates enhanced by the Navigation SDK (cleaned up and matched to the road).
-     */
-    private val locationObserver = object : LocationObserver {
-        override fun onNewLocationMatcherResult(locationMatcherResult: LocationMatcherResult) {
-            lastLocation = locationMatcherResult.enhancedLocation
-        }
-
-        override fun onNewRawLocation(rawLocation: Location) {
-            // no impl
-        }
-    }
-
-    private val bannerInstructionObserver = BannerInstructionsObserver { bannerInstructions ->
-        sendEvent(MapBoxEvents.BANNER_INSTRUCTION, bannerInstructions.primary().text())
-    }
-
-    private val voiceInstructionObserver = VoiceInstructionsObserver { voiceInstructions ->
-        sendEvent(MapBoxEvents.SPEECH_ANNOUNCEMENT, voiceInstructions.announcement().toString())
-    }
-
-    private val offRouteObserver = OffRouteObserver { offRoute ->
-        if (offRoute) {
-            sendEvent(MapBoxEvents.USER_OFF_ROUTE)
-        }
-    }
-
-    private val routesObserver = RoutesObserver { routeUpdateResult ->
-        if (routeUpdateResult.navigationRoutes.isNotEmpty()) {
-            sendEvent(MapBoxEvents.REROUTE_ALONG);
-        }
-    }
-
-    /**
-     * Notifies with attach and detach events on [MapView]
-     */
-    private val onMapLongClick = object : MapViewObserver(), OnMapLongClickListener {
-
-        override fun onAttached(mapView: MapView) {
-            mapView.gestures.addOnMapLongClickListener(this)
-        }
-
-        override fun onDetached(mapView: MapView) {
-            mapView.gestures.removeOnMapLongClickListener(this)
-        }
-
-        override fun onMapLongClick(point: Point): Boolean {
-            ifNonNull(lastLocation) {
-                val waypointSet = WaypointSet()
-                waypointSet.add(Waypoint(Point.fromLngLat(it.longitude, it.latitude)))
-                waypointSet.add(Waypoint(point))
-                requestRoutes(waypointSet)
-            }
-            return false
-        }
+    private companion object {
+        const val BUTTON_ANIMATION_DURATION = 1500L
     }
 }

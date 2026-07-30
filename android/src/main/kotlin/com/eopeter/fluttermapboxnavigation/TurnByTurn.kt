@@ -1,43 +1,96 @@
+// The replay trip session (route simulation) is still behind Mapbox's
+// experimental-preview opt-in in v3, exactly as in their own example app.
+@file:OptIn(com.mapbox.navigation.base.ExperimentalPreviewMapboxNavigationAPI::class)
+
 package com.eopeter.fluttermapboxnavigation
 
 import android.annotation.SuppressLint
 import android.app.Activity
 import android.app.Application
 import android.content.Context
-import android.location.Location
+import android.content.res.Configuration
 import android.os.Bundle
-import android.util.Log
+import android.view.View
 import androidx.lifecycle.LifecycleOwner
 import com.eopeter.fluttermapboxnavigation.databinding.NavigationActivityBinding
 import com.eopeter.fluttermapboxnavigation.models.MapBoxEvents
 import com.eopeter.fluttermapboxnavigation.models.MapBoxRouteProgressEvent
 import com.eopeter.fluttermapboxnavigation.models.Waypoint
 import com.eopeter.fluttermapboxnavigation.models.WaypointSet
-import com.eopeter.fluttermapboxnavigation.utilities.CustomInfoPanelEndNavButtonBinder
 import com.eopeter.fluttermapboxnavigation.utilities.PluginUtilities
 import com.google.gson.Gson
-import com.mapbox.maps.Style
 import com.mapbox.api.directions.v5.DirectionsCriteria
+import com.mapbox.api.directions.v5.models.DirectionsRoute
 import com.mapbox.api.directions.v5.models.RouteOptions
+import com.mapbox.bindgen.Expected
+import com.mapbox.common.location.Location
 import com.mapbox.geojson.Point
+import com.mapbox.maps.EdgeInsets
+import com.mapbox.maps.ImageHolder
+import com.mapbox.maps.Style
+import com.mapbox.maps.plugin.LocationPuck2D
+import com.mapbox.maps.plugin.animation.camera
+import com.mapbox.maps.plugin.locationcomponent.location
+import com.mapbox.navigation.base.TimeFormat
 import com.mapbox.navigation.base.extensions.applyDefaultNavigationOptions
 import com.mapbox.navigation.base.extensions.applyLanguageAndVoiceUnitOptions
+import com.mapbox.navigation.base.formatter.DistanceFormatterOptions
 import com.mapbox.navigation.base.options.NavigationOptions
 import com.mapbox.navigation.base.route.NavigationRoute
 import com.mapbox.navigation.base.route.NavigationRouterCallback
 import com.mapbox.navigation.base.route.RouterFailure
-import com.mapbox.navigation.base.route.RouterOrigin
 import com.mapbox.navigation.base.trip.model.RouteLegProgress
 import com.mapbox.navigation.base.trip.model.RouteProgress
 import com.mapbox.navigation.core.arrival.ArrivalObserver
 import com.mapbox.navigation.core.directions.session.RoutesObserver
+import com.mapbox.navigation.core.formatter.MapboxDistanceFormatter
 import com.mapbox.navigation.core.lifecycle.MapboxNavigationApp
-import com.mapbox.navigation.core.trip.session.*
+import com.mapbox.navigation.core.replay.route.ReplayProgressObserver
+import com.mapbox.navigation.core.replay.route.ReplayRouteMapper
+import com.mapbox.navigation.core.trip.session.LocationMatcherResult
+import com.mapbox.navigation.core.trip.session.LocationObserver
+import com.mapbox.navigation.core.trip.session.OffRouteObserver
+import com.mapbox.navigation.core.trip.session.RouteProgressObserver
+import com.mapbox.navigation.core.trip.session.VoiceInstructionsObserver
+import com.mapbox.navigation.tripdata.maneuver.api.MapboxManeuverApi
+import com.mapbox.navigation.tripdata.progress.api.MapboxTripProgressApi
+import com.mapbox.navigation.tripdata.progress.model.DistanceRemainingFormatter
+import com.mapbox.navigation.tripdata.progress.model.EstimatedTimeToArrivalFormatter
+import com.mapbox.navigation.tripdata.progress.model.PercentDistanceTraveledFormatter
+import com.mapbox.navigation.tripdata.progress.model.TimeRemainingFormatter
+import com.mapbox.navigation.tripdata.progress.model.TripProgressUpdateFormatter
+import com.mapbox.navigation.ui.base.util.MapboxNavigationConsumer
+import com.mapbox.navigation.ui.maps.NavigationStyles
+import com.mapbox.navigation.ui.maps.camera.NavigationCamera
+import com.mapbox.navigation.ui.maps.camera.data.MapboxNavigationViewportDataSource
+import com.mapbox.navigation.ui.maps.camera.lifecycle.NavigationBasicGesturesHandler
+import com.mapbox.navigation.ui.maps.camera.state.NavigationCameraState
+import com.mapbox.navigation.ui.maps.location.NavigationLocationProvider
+import com.mapbox.navigation.ui.maps.route.arrow.api.MapboxRouteArrowApi
+import com.mapbox.navigation.ui.maps.route.arrow.api.MapboxRouteArrowView
+import com.mapbox.navigation.ui.maps.route.arrow.model.RouteArrowOptions
+import com.mapbox.navigation.ui.maps.route.line.api.MapboxRouteLineApi
+import com.mapbox.navigation.ui.maps.route.line.api.MapboxRouteLineView
+import com.mapbox.navigation.ui.maps.route.line.model.MapboxRouteLineApiOptions
+import com.mapbox.navigation.ui.maps.route.line.model.MapboxRouteLineViewOptions
+import com.mapbox.navigation.voice.api.MapboxSpeechApi
+import com.mapbox.navigation.voice.api.MapboxVoiceInstructionsPlayer
+import com.mapbox.navigation.voice.model.SpeechAnnouncement
+import com.mapbox.navigation.voice.model.SpeechError
+import com.mapbox.navigation.voice.model.SpeechValue
+import com.mapbox.navigation.voice.model.SpeechVolume
 import io.flutter.plugin.common.EventChannel
 import io.flutter.plugin.common.MethodCall
 import io.flutter.plugin.common.MethodChannel
-import java.util.*
 
+/**
+ * The embedded-view navigation controller, rebuilt on Navigation SDK v3.
+ *
+ * v2 handed the embedded platform view to Drop-In UI; v3 has no Drop-In, so
+ * this class owns the same modular pieces the full-screen activity uses (route
+ * line, camera, maneuvers, trip progress, voice) inside the host's MapView.
+ * The Flutter method/event channel contract is unchanged.
+ */
 open class TurnByTurn(
     ctx: Context,
     act: Activity,
@@ -53,16 +106,102 @@ open class TurnByTurn(
     }
 
     open fun initNavigation() {
-        val navigationOptions = NavigationOptions.Builder(this.context)
-            .accessToken(this.token)
-            .build()
-
         MapboxNavigationApp
-            .setup(navigationOptions)
+            .setup(NavigationOptions.Builder(this.context).build())
             .attach(this.activity as LifecycleOwner)
 
-        // initialize navigation trip observers
+        // Camera + viewport
+        this.viewportDataSource =
+            MapboxNavigationViewportDataSource(this.binding.mapView.mapboxMap)
+        this.navigationCamera = NavigationCamera(
+            this.binding.mapView.mapboxMap,
+            this.binding.mapView.camera,
+            this.viewportDataSource
+        )
+        this.binding.mapView.camera.addCameraAnimationsLifecycleListener(
+            NavigationBasicGesturesHandler(this.navigationCamera)
+        )
+        this.navigationCamera.registerNavigationCameraStateChangeObserver { state ->
+            when (state) {
+                NavigationCameraState.TRANSITION_TO_FOLLOWING,
+                NavigationCameraState.FOLLOWING ->
+                    this.binding.recenter.visibility = View.INVISIBLE
+                NavigationCameraState.TRANSITION_TO_OVERVIEW,
+                NavigationCameraState.OVERVIEW,
+                NavigationCameraState.IDLE ->
+                    this.binding.recenter.visibility = View.VISIBLE
+            }
+        }
+        val density = this.context.resources.displayMetrics.density
+        this.viewportDataSource.overviewPadding =
+            EdgeInsets(140.0 * density, 40.0 * density, 120.0 * density, 40.0 * density)
+        this.viewportDataSource.followingPadding =
+            EdgeInsets(180.0 * density, 40.0 * density, 150.0 * density, 40.0 * density)
+
+        // Trip data + views
+        val distanceFormatterOptions = DistanceFormatterOptions.Builder(this.context).build()
+        this.maneuverApi = MapboxManeuverApi(MapboxDistanceFormatter(distanceFormatterOptions))
+        this.tripProgressApi = MapboxTripProgressApi(
+            TripProgressUpdateFormatter.Builder(this.context)
+                .distanceRemainingFormatter(DistanceRemainingFormatter(distanceFormatterOptions))
+                .timeRemainingFormatter(TimeRemainingFormatter(this.context))
+                .percentRouteTraveledFormatter(PercentDistanceTraveledFormatter())
+                .estimatedTimeToArrivalFormatter(
+                    EstimatedTimeToArrivalFormatter(this.context, TimeFormat.NONE_SPECIFIED)
+                )
+                .build()
+        )
+        this.speechApi = MapboxSpeechApi(this.context, this.navigationLanguage)
+        this.voiceInstructionsPlayer =
+            MapboxVoiceInstructionsPlayer(this.context, this.navigationLanguage)
+        this.routeLineApi = MapboxRouteLineApi(MapboxRouteLineApiOptions.Builder().build())
+        this.routeLineView = MapboxRouteLineView(
+            MapboxRouteLineViewOptions.Builder(this.context)
+                .routeLineBelowLayerId("road-label-navigation")
+                .build()
+        )
+        this.routeArrowView =
+            MapboxRouteArrowView(RouteArrowOptions.Builder(this.context).build())
+
+        // Puck
+        this.binding.mapView.location.apply {
+            setLocationProvider(this@TurnByTurn.navigationLocationProvider)
+            locationPuck = LocationPuck2D(
+                bearingImage = ImageHolder.from(
+                    com.mapbox.navigation.ui.components.R.drawable.mapbox_navigation_puck_icon
+                )
+            )
+            puckBearingEnabled = true
+            enabled = true
+        }
+
+        // Style — day/night from the host's configuration, like the activity.
+        val nightMode = this.context.resources.configuration.uiMode and
+            Configuration.UI_MODE_NIGHT_MASK == Configuration.UI_MODE_NIGHT_YES
+        val styleUrl = if (nightMode) {
+            this.mapStyleUrlNight ?: NavigationStyles.NAVIGATION_NIGHT_STYLE
+        } else {
+            this.mapStyleUrlDay ?: NavigationStyles.NAVIGATION_DAY_STYLE
+        }
+        this.binding.mapView.mapboxMap.loadStyle(styleUrl) { style ->
+            this.routeLineView.initializeLayers(style)
+        }
+
+        this.binding.recenter.setOnClickListener {
+            this.navigationCamera.requestNavigationCameraToFollowing()
+        }
+        this.binding.routeOverview.setOnClickListener {
+            this.navigationCamera.requestNavigationCameraToOverview()
+        }
+        this.binding.soundButton.setOnClickListener {
+            this.isVoiceInstructionsMuted = !this.isVoiceInstructionsMuted
+        }
+        this.binding.stop.setOnClickListener {
+            this.finishNavigation()
+        }
+
         this.registerObservers()
+        MapboxNavigationApp.current()?.startTripSession(withForegroundService = false)
     }
 
     override fun onMethodCall(methodCall: MethodCall, result: MethodChannel.Result) {
@@ -71,7 +210,7 @@ open class TurnByTurn(
                 result.success("Android ${android.os.Build.VERSION.RELEASE}")
             }
             "enableOfflineRouting" -> {
-                // downloadRegionForOfflineRouting(call, result)
+                // not implemented on Android
             }
             "buildRoute" -> {
                 this.buildRoute(methodCall, result)
@@ -136,21 +275,23 @@ open class TurnByTurn(
             callback = object : NavigationRouterCallback {
                 override fun onRoutesReady(
                     routes: List<NavigationRoute>,
-                    routerOrigin: RouterOrigin
+                    routerOrigin: String
                 ) {
                     this@TurnByTurn.currentRoutes = routes
                     PluginUtilities.sendEvent(
                         MapBoxEvents.ROUTE_BUILT,
                         Gson().toJson(routes.map { it.directionsRoute.toJson() })
                     )
-                    this@TurnByTurn.binding.navigationView.api.routeReplayEnabled(
-                        this@TurnByTurn.simulateRoute
-                    )
-                    this@TurnByTurn.binding.navigationView.api.startRoutePreview(routes)
-                    this@TurnByTurn.binding.navigationView.customizeViewBinders {
-                        this.infoPanelEndNavigationButtonBinder =
-                            CustomInfoPanelEndNavButtonBinder(activity)
+                    // Show the line on the embedded map right away (preview);
+                    // guidance starts when startNavigation is called.
+                    this@TurnByTurn.routeLineApi.setNavigationRoutes(routes) { value ->
+                        this@TurnByTurn.binding.mapView.mapboxMap.style?.apply {
+                            this@TurnByTurn.routeLineView.renderRouteDrawData(this, value)
+                        }
                     }
+                    this@TurnByTurn.viewportDataSource.onRouteChanged(routes.first())
+                    this@TurnByTurn.viewportDataSource.evaluate()
+                    this@TurnByTurn.navigationCamera.requestNavigationCameraToOverview()
                 }
 
                 override fun onFailure(
@@ -162,7 +303,7 @@ open class TurnByTurn(
 
                 override fun onCanceled(
                     routeOptions: RouteOptions,
-                    routerOrigin: RouterOrigin
+                    routerOrigin: String
                 ) {
                     PluginUtilities.sendEvent(MapBoxEvents.ROUTE_BUILD_CANCELLED)
                 }
@@ -172,13 +313,15 @@ open class TurnByTurn(
 
     private fun clearRoute(methodCall: MethodCall, result: MethodChannel.Result) {
         this.currentRoutes = null
-        val navigation = MapboxNavigationApp.current()
-        navigation?.stopTripSession()
+        MapboxNavigationApp.current()?.setNavigationRoutes(listOf())
         PluginUtilities.sendEvent(MapBoxEvents.NAVIGATION_CANCELLED)
     }
 
+    @SuppressLint("MissingPermission")
     private fun startFreeDrive() {
-        this.binding.navigationView.api.startFreeDrive()
+        // Free drive on v3 is simply an active trip session with no routes set.
+        MapboxNavigationApp.current()?.startTripSession(withForegroundService = false)
+        PluginUtilities.sendEvent(MapBoxEvents.NAVIGATION_RUNNING)
     }
 
     private fun startNavigation(methodCall: MethodCall, result: MethodChannel.Result) {
@@ -208,16 +351,42 @@ open class TurnByTurn(
 
     @SuppressLint("MissingPermission")
     private fun startNavigation() {
-        if (this.currentRoutes == null) {
+        val routes = this.currentRoutes
+        if (routes == null) {
             PluginUtilities.sendEvent(MapBoxEvents.NAVIGATION_CANCELLED)
             return
         }
-        this.binding.navigationView.api.startActiveGuidance(this.currentRoutes!!)
+        val navigation = MapboxNavigationApp.current() ?: return
+        navigation.setNavigationRoutes(routes)
+        if (this.simulateRoute) {
+            navigation.startReplayTripSession()
+            this.startSimulation(routes.first().directionsRoute)
+        } else {
+            navigation.startTripSession(withForegroundService = false)
+        }
+        this.navigationCamera.requestNavigationCameraToFollowing()
         PluginUtilities.sendEvent(MapBoxEvents.NAVIGATION_RUNNING)
     }
 
+    private fun startSimulation(route: DirectionsRoute) {
+        val navigation = MapboxNavigationApp.current() ?: return
+        with(navigation.mapboxReplayer) {
+            stop()
+            clearEvents()
+            val replayData = this@TurnByTurn.replayRouteMapper.mapDirectionsRouteGeometry(route)
+            pushEvents(replayData)
+            seekTo(replayData[0])
+            play()
+        }
+    }
+
     private fun finishNavigation(isOffRouted: Boolean = false) {
-        MapboxNavigationApp.current()!!.stopTripSession()
+        val navigation = MapboxNavigationApp.current() ?: return
+        navigation.setNavigationRoutes(listOf())
+        if (this.simulateRoute) {
+            navigation.mapboxReplayer.stop()
+            navigation.mapboxReplayer.clearEvents()
+        }
         this.isNavigationCanceled = true
         PluginUtilities.sendEvent(MapBoxEvents.NAVIGATION_CANCELLED)
     }
@@ -255,15 +424,6 @@ open class TurnByTurn(
         this.mapStyleUrlDay = arguments["mapStyleUrlDay"] as? String
         this.mapStyleUrlNight = arguments["mapStyleUrlNight"] as? String
 
-        //Set the style Uri
-        if (this.mapStyleUrlDay == null) this.mapStyleUrlDay = Style.MAPBOX_STREETS
-        if (this.mapStyleUrlNight == null) this.mapStyleUrlNight = Style.DARK
-
-        this@TurnByTurn.binding.navigationView.customizeViewOptions {
-            mapStyleUriDay = this@TurnByTurn.mapStyleUrlDay
-            mapStyleUriNight = this@TurnByTurn.mapStyleUrlNight
-        }           
-
         this.initialLatitude = arguments["initialLatitude"] as? Double
         this.initialLongitude = arguments["initialLongitude"] as? Double
 
@@ -300,6 +460,7 @@ open class TurnByTurn(
         val voiceEnabled = arguments["voiceInstructionsEnabled"] as? Boolean
         if (voiceEnabled != null) {
             this.voiceInstructionsEnabled = voiceEnabled
+            this.isVoiceInstructionsMuted = !voiceEnabled
         }
 
         val bannerEnabled = arguments["bannerInstructionsEnabled"] as? Boolean
@@ -314,8 +475,6 @@ open class TurnByTurn(
     }
 
     open fun registerObservers() {
-        // register event listeners
-        MapboxNavigationApp.current()?.registerBannerInstructionsObserver(this.bannerInstructionObserver)
         MapboxNavigationApp.current()?.registerVoiceInstructionsObserver(this.voiceInstructionObserver)
         MapboxNavigationApp.current()?.registerOffRouteObserver(this.offRouteObserver)
         MapboxNavigationApp.current()?.registerRoutesObserver(this.routesObserver)
@@ -325,14 +484,17 @@ open class TurnByTurn(
     }
 
     open fun unregisterObservers() {
-        // unregister event listeners to prevent leaks or unnecessary resource consumption
-        MapboxNavigationApp.current()?.unregisterBannerInstructionsObserver(this.bannerInstructionObserver)
         MapboxNavigationApp.current()?.unregisterVoiceInstructionsObserver(this.voiceInstructionObserver)
         MapboxNavigationApp.current()?.unregisterOffRouteObserver(this.offRouteObserver)
         MapboxNavigationApp.current()?.unregisterRoutesObserver(this.routesObserver)
         MapboxNavigationApp.current()?.unregisterLocationObserver(this.locationObserver)
         MapboxNavigationApp.current()?.unregisterRouteProgressObserver(this.routeProgressObserver)
         MapboxNavigationApp.current()?.unregisterArrivalObserver(this.arrivalObserver)
+        this.maneuverApi.cancel()
+        this.routeLineApi.cancel()
+        this.routeLineView.cancel()
+        this.speechApi.cancel()
+        this.voiceInstructionsPlayer.shutdown()
     }
 
     // Flutter stream listener delegate methods
@@ -360,7 +522,6 @@ open class TurnByTurn(
     private var initialLatitude: Double? = null
     private var initialLongitude: Double? = null
 
-    // val wayPoints: MutableList<Point> = mutableListOf()
     private var navigationMode = DirectionsCriteria.PROFILE_DRIVING_TRAFFIC
     var simulateRoute = false
     private var mapStyleUrlDay: String? = null
@@ -387,19 +548,71 @@ open class TurnByTurn(
     private var isNavigationCanceled = false
 
     /**
-     * Bindings to the example layout.
+     * Bindings to the embedded navigation layout (MapView + component views).
      */
     open val binding: NavigationActivityBinding = bind
 
+    // v3 components
+    private lateinit var viewportDataSource: MapboxNavigationViewportDataSource
+    private lateinit var navigationCamera: NavigationCamera
+    private lateinit var maneuverApi: MapboxManeuverApi
+    private lateinit var tripProgressApi: MapboxTripProgressApi
+    private lateinit var routeLineApi: MapboxRouteLineApi
+    private lateinit var routeLineView: MapboxRouteLineView
+    private val routeArrowApi: MapboxRouteArrowApi = MapboxRouteArrowApi()
+    private lateinit var routeArrowView: MapboxRouteArrowView
+    private lateinit var speechApi: MapboxSpeechApi
+    private lateinit var voiceInstructionsPlayer: MapboxVoiceInstructionsPlayer
+    private val navigationLocationProvider = NavigationLocationProvider()
+    private val replayRouteMapper = ReplayRouteMapper()
+
+    private var isVoiceInstructionsMuted = false
+        set(value) {
+            field = value
+            if (!this::voiceInstructionsPlayer.isInitialized) return
+            if (value) {
+                this.binding.soundButton.muteAndExtend(1500L)
+                this.voiceInstructionsPlayer.volume(SpeechVolume(0f))
+            } else {
+                this.binding.soundButton.unmuteAndExtend(1500L)
+                this.voiceInstructionsPlayer.volume(SpeechVolume(1f))
+            }
+        }
+
+    private val speechCallback =
+        MapboxNavigationConsumer<Expected<SpeechError, SpeechValue>> { expected ->
+            expected.fold(
+                { error ->
+                    this.voiceInstructionsPlayer.play(error.fallback, this.voiceCleanupCallback)
+                },
+                { value ->
+                    this.voiceInstructionsPlayer.play(value.announcement, this.voiceCleanupCallback)
+                }
+            )
+        }
+
+    private val voiceCleanupCallback =
+        MapboxNavigationConsumer<SpeechAnnouncement> { value -> this.speechApi.clean(value) }
+
     /**
      * Gets notified with location updates.
-     *
-     * Exposes raw updates coming directly from the location services
-     * and the updates enhanced by the Navigation SDK (cleaned up and matched to the road).
      */
     private val locationObserver = object : LocationObserver {
+        var firstLocationUpdateReceived = false
+
         override fun onNewLocationMatcherResult(locationMatcherResult: LocationMatcherResult) {
-            this@TurnByTurn.lastLocation = locationMatcherResult.enhancedLocation
+            val enhancedLocation = locationMatcherResult.enhancedLocation
+            this@TurnByTurn.lastLocation = enhancedLocation
+            this@TurnByTurn.navigationLocationProvider.changePosition(
+                location = enhancedLocation,
+                keyPoints = locationMatcherResult.keyPoints,
+            )
+            this@TurnByTurn.viewportDataSource.onLocationChanged(enhancedLocation)
+            this@TurnByTurn.viewportDataSource.evaluate()
+            if (!firstLocationUpdateReceived) {
+                firstLocationUpdateReceived = true
+                this@TurnByTurn.navigationCamera.requestNavigationCameraToFollowing()
+            }
         }
 
         override fun onNewRawLocation(rawLocation: Location) {
@@ -407,12 +620,14 @@ open class TurnByTurn(
         }
     }
 
-    private val bannerInstructionObserver = BannerInstructionsObserver { bannerInstructions ->
-        PluginUtilities.sendEvent(MapBoxEvents.BANNER_INSTRUCTION, bannerInstructions.primary().text())
-    }
-
     private val voiceInstructionObserver = VoiceInstructionsObserver { voiceInstructions ->
-        PluginUtilities.sendEvent(MapBoxEvents.SPEECH_ANNOUNCEMENT, voiceInstructions.announcement().toString())
+        PluginUtilities.sendEvent(
+            MapBoxEvents.SPEECH_ANNOUNCEMENT,
+            voiceInstructions.announcement().toString()
+        )
+        if (!this.isVoiceInstructionsMuted) {
+            this.speechApi.generate(voiceInstructions, this.speechCallback)
+        }
     }
 
     private val offRouteObserver = OffRouteObserver { offRoute ->
@@ -423,7 +638,23 @@ open class TurnByTurn(
 
     private val routesObserver = RoutesObserver { routeUpdateResult ->
         if (routeUpdateResult.navigationRoutes.isNotEmpty()) {
-            PluginUtilities.sendEvent(MapBoxEvents.REROUTE_ALONG);
+            this.routeLineApi.setNavigationRoutes(routeUpdateResult.navigationRoutes) { value ->
+                this.binding.mapView.mapboxMap.style?.apply {
+                    this@TurnByTurn.routeLineView.renderRouteDrawData(this, value)
+                }
+            }
+            this.viewportDataSource.onRouteChanged(routeUpdateResult.navigationRoutes.first())
+            this.viewportDataSource.evaluate()
+            PluginUtilities.sendEvent(MapBoxEvents.REROUTE_ALONG)
+        } else {
+            this.binding.mapView.mapboxMap.style?.let { style ->
+                this.routeLineApi.clearRouteLine { value ->
+                    this@TurnByTurn.routeLineView.renderClearRouteLineValue(style, value)
+                }
+                this.routeArrowView.render(style, this.routeArrowApi.clearArrows())
+            }
+            this.viewportDataSource.clearRouteData()
+            this.viewportDataSource.evaluate()
         }
     }
 
@@ -431,17 +662,41 @@ open class TurnByTurn(
      * Gets notified with progress along the currently active route.
      */
     private val routeProgressObserver = RouteProgressObserver { routeProgress ->
-        // update flutter events
         if (!this.isNavigationCanceled) {
             try {
-
                 this.distanceRemaining = routeProgress.distanceRemaining
                 this.durationRemaining = routeProgress.durationRemaining
 
+                this.viewportDataSource.onRouteProgressChanged(routeProgress)
+                this.viewportDataSource.evaluate()
+
+                this.binding.mapView.mapboxMap.style?.let { style ->
+                    this.routeArrowView.renderManeuverUpdate(
+                        style,
+                        this.routeArrowApi.addUpcomingManeuverArrow(routeProgress)
+                    )
+                }
+
+                val maneuvers = this.maneuverApi.getManeuvers(routeProgress)
+                maneuvers.fold(
+                    { /* keep the previous banner */ },
+                    {
+                        this.binding.maneuverView.visibility = View.VISIBLE
+                        this.binding.maneuverView.renderManeuvers(maneuvers)
+                    }
+                )
+                this.binding.tripProgressCard.visibility = View.VISIBLE
+                this.binding.tripProgressView.render(
+                    this.tripProgressApi.getTripProgress(routeProgress)
+                )
+
+                routeProgress.bannerInstructions?.primary()?.text()?.let {
+                    PluginUtilities.sendEvent(MapBoxEvents.BANNER_INSTRUCTION, it)
+                }
                 val progressEvent = MapBoxRouteProgressEvent(routeProgress)
                 PluginUtilities.sendEvent(progressEvent)
             } catch (_: java.lang.Exception) {
-                // handle this error
+                // A malformed progress tick must not take the stream down.
             }
         }
     }
@@ -460,31 +715,11 @@ open class TurnByTurn(
         }
     }
 
-    override fun onActivityCreated(activity: Activity, savedInstanceState: Bundle?) {
-        Log.d("Embedded", "onActivityCreated not implemented")
-    }
-
-    override fun onActivityStarted(activity: Activity) {
-        Log.d("Embedded", "onActivityStarted not implemented")
-    }
-
-    override fun onActivityResumed(activity: Activity) {
-        Log.d("Embedded", "onActivityResumed not implemented")
-    }
-
-    override fun onActivityPaused(activity: Activity) {
-        Log.d("Embedded", "onActivityPaused not implemented")
-    }
-
-    override fun onActivityStopped(activity: Activity) {
-        Log.d("Embedded", "onActivityStopped not implemented")
-    }
-
-    override fun onActivitySaveInstanceState(activity: Activity, outState: Bundle) {
-        Log.d("Embedded", "onActivitySaveInstanceState not implemented")
-    }
-
-    override fun onActivityDestroyed(activity: Activity) {
-        Log.d("Embedded", "onActivityDestroyed not implemented")
-    }
+    override fun onActivityCreated(activity: Activity, savedInstanceState: Bundle?) {}
+    override fun onActivityStarted(activity: Activity) {}
+    override fun onActivityResumed(activity: Activity) {}
+    override fun onActivityPaused(activity: Activity) {}
+    override fun onActivityStopped(activity: Activity) {}
+    override fun onActivitySaveInstanceState(activity: Activity, outState: Bundle) {}
+    override fun onActivityDestroyed(activity: Activity) {}
 }

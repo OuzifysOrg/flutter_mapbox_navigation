@@ -29,15 +29,12 @@ class EmbeddedNavigationMapView(
         super.initFlutterChannelHandlers()
     }
 
-    open fun initialize() {
+    fun initialize() {
         initFlutterChannelHandlers()
         initNavigation()
-
-        if(!(this.arguments?.get("longPressDestinationEnabled") as Boolean)) {
-            this.binding.navigationView.customizeViewOptions {
-                enableMapLongClickIntercept = false;
-            }
-        }
+        // v2 disabled Drop-In's long-press intercept here. Drop-In is gone in
+        // v3 and the embedded view registers no long-press handler, so there
+        // is nothing to opt out of any more.
     }
 
     override fun getView(): View {
