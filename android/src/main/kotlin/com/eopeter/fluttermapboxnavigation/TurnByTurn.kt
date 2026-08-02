@@ -236,6 +236,19 @@ open class TurnByTurn(
                 FlutterMapboxNavigationPlugin.enableFreeDriveMode = false
                 this.startNavigation(methodCall, result)
             }
+            "selectRoute" -> {
+                // Programmatic twin of the preview map tap — used by the
+                // Android Auto route preview screen. Index into the order the
+                // last ROUTE_BUILT reported.
+                val index = (methodCall.arguments as? Map<*, *>)?.get("index") as? Int
+                val routes = this.currentRoutes
+                if (index == null || routes == null || index !in routes.indices) {
+                    result.success(false)
+                } else {
+                    this.selectRoute(routes[index])
+                    result.success(true)
+                }
+            }
             "finishNavigation" -> {
                 this.finishNavigation(methodCall, result)
             }
@@ -287,20 +300,13 @@ open class TurnByTurn(
                     routes: List<NavigationRoute>,
                     routerOrigin: String
                 ) {
-                    this@TurnByTurn.currentRoutes = routes
-                    PluginUtilities.sendEvent(
-                        MapBoxEvents.ROUTE_BUILT,
-                        Gson().toJson(routes.map { it.directionsRoute.toJson() })
-                    )
-                    // Show the line on the embedded map right away (preview);
-                    // guidance starts when startNavigation is called.
-                    this@TurnByTurn.routeLineApi.setNavigationRoutes(routes) { value ->
-                        this@TurnByTurn.binding.mapView.mapboxMap.style?.apply {
-                            this@TurnByTurn.routeLineView.renderRouteDrawData(this, value)
-                        }
-                    }
-                    this@TurnByTurn.viewportDataSource.onRouteChanged(routes.first())
-                    this@TurnByTurn.viewportDataSource.evaluate()
+                    // Hand the routes to the SDK's preview state. The
+                    // registered RoutesPreviewObserver is the single sync
+                    // point: it renders the lines, updates currentRoutes and
+                    // sends ROUTE_BUILT — for this build, for map taps, and
+                    // for the car's selectRoute alike. It also puts the
+                    // preview where the Android Auto surface can draw it.
+                    MapboxNavigationApp.current()?.setRoutesPreview(routes)
                     this@TurnByTurn.navigationCamera.requestNavigationCameraToOverview()
                 }
 
@@ -336,32 +342,65 @@ open class TurnByTurn(
             this.binding.mapView.mapboxMap,
             threshold
         ) { expected ->
-            expected.value?.navigationRoute?.let { tapped ->
-                val current = this.currentRoutes ?: return@let
-                if (current.firstOrNull()?.id == tapped.id) return@let
-                val reordered = listOf(tapped) + current.filter { it.id != tapped.id }
-                this.currentRoutes = reordered
-                // Same event as the initial build, so the Dart side re-reads
-                // durations and Start begins on the promoted route.
-                PluginUtilities.sendEvent(
-                    MapBoxEvents.ROUTE_BUILT,
-                    Gson().toJson(reordered.map { it.directionsRoute.toJson() })
-                )
-                this.routeLineApi.setNavigationRoutes(reordered) { value ->
-                    this.binding.mapView.mapboxMap.style?.apply {
-                        this@TurnByTurn.routeLineView.renderRouteDrawData(this, value)
-                    }
-                }
-                this.viewportDataSource.onRouteChanged(reordered.first())
-                this.viewportDataSource.evaluate()
-            }
+            expected.value?.navigationRoute?.let { tapped -> this.selectRoute(tapped) }
         }
+    }
+
+    // Promote a route to primary in the SDK's preview state. The preview
+    // observer does the rendering and eventing, so a phone tap, the car's
+    // selectRoute and the initial build all flow through one path.
+    private fun selectRoute(route: NavigationRoute) {
+        if (this.isNavigationRunning) return
+        if (this.currentRoutes?.firstOrNull()?.id == route.id) return
+        try {
+            MapboxNavigationApp.current()?.changeRoutesPreviewPrimaryRoute(route)
+        } catch (e: IllegalArgumentException) {
+            // The route is no longer in the preview (stale tap) — ignore.
+        }
+    }
+
+    // The single sync point for route preview: initial build, phone map taps
+    // and the car's selectRoute all land here via the session's preview state.
+    private val routesPreviewObserver =
+        com.mapbox.navigation.core.preview.RoutesPreviewObserver { update ->
+            val preview = update.routesPreview ?: return@RoutesPreviewObserver
+            val routes = preview.routesList
+            if (routes.isEmpty()) return@RoutesPreviewObserver
+            // Primary first — the order startNavigation will use.
+            val primary = preview.primaryRoute
+            val ordered = listOf(primary) + routes.filter { it.id != primary.id }
+            this.currentRoutes = ordered
+            PluginUtilities.sendEvent(MapBoxEvents.ROUTE_BUILT, routeSummariesJson(ordered))
+            this.routeLineApi.setNavigationRoutes(ordered) { value ->
+                this.binding.mapView.mapboxMap.style?.apply {
+                    this@TurnByTurn.routeLineView.renderRouteDrawData(this, value)
+                }
+            }
+            this.viewportDataSource.onRouteChanged(ordered.first())
+            this.viewportDataSource.evaluate()
+        }
+
+    // Compact per-route summaries for the Dart side's preview sheet — index,
+    // label (first leg's road summary), duration and distance. Replaces the
+    // earlier full-DirectionsRoute JSON, which nothing consumed.
+    private fun routeSummariesJson(routes: List<NavigationRoute>): String {
+        val summaries = routes.mapIndexed { i, r ->
+            mapOf(
+                "index" to i,
+                "label" to (r.directionsRoute.legs()?.firstOrNull()?.summary()
+                    ?: "Route ${i + 1}"),
+                "durationS" to r.directionsRoute.duration(),
+                "distanceM" to r.directionsRoute.distance(),
+            )
+        }
+        return Gson().toJson(summaries)
     }
 
     private fun clearRoute(methodCall: MethodCall, result: MethodChannel.Result) {
         this.currentRoutes = null
         this.isNavigationRunning = false
         MapboxNavigationApp.current()?.setNavigationRoutes(listOf())
+        MapboxNavigationApp.current()?.setRoutesPreview(emptyList())
         PluginUtilities.sendEvent(MapBoxEvents.NAVIGATION_CANCELLED)
     }
 
@@ -414,6 +453,10 @@ open class TurnByTurn(
         }
         this.navigationCamera.requestNavigationCameraToFollowing()
         this.isNavigationRunning = true
+        // Preview is over — clear it AFTER setNavigationRoutes so the empty
+        // update is a no-op in the observer and the car surface hands over
+        // from the preview lines to the active-guidance line.
+        navigation.setRoutesPreview(emptyList())
         PluginUtilities.sendEvent(MapBoxEvents.NAVIGATION_RUNNING)
     }
 
@@ -438,6 +481,7 @@ open class TurnByTurn(
         }
         this.isNavigationCanceled = true
         this.isNavigationRunning = false
+        navigation.setRoutesPreview(emptyList())
         PluginUtilities.sendEvent(MapBoxEvents.NAVIGATION_CANCELLED)
     }
 
@@ -528,6 +572,7 @@ open class TurnByTurn(
         MapboxNavigationApp.current()?.registerVoiceInstructionsObserver(this.voiceInstructionObserver)
         MapboxNavigationApp.current()?.registerOffRouteObserver(this.offRouteObserver)
         MapboxNavigationApp.current()?.registerRoutesObserver(this.routesObserver)
+        MapboxNavigationApp.current()?.registerRoutesPreviewObserver(this.routesPreviewObserver)
         MapboxNavigationApp.current()?.registerLocationObserver(this.locationObserver)
         MapboxNavigationApp.current()?.registerRouteProgressObserver(this.routeProgressObserver)
         MapboxNavigationApp.current()?.registerArrivalObserver(this.arrivalObserver)
@@ -537,6 +582,7 @@ open class TurnByTurn(
         MapboxNavigationApp.current()?.unregisterVoiceInstructionsObserver(this.voiceInstructionObserver)
         MapboxNavigationApp.current()?.unregisterOffRouteObserver(this.offRouteObserver)
         MapboxNavigationApp.current()?.unregisterRoutesObserver(this.routesObserver)
+        MapboxNavigationApp.current()?.unregisterRoutesPreviewObserver(this.routesPreviewObserver)
         MapboxNavigationApp.current()?.unregisterLocationObserver(this.locationObserver)
         MapboxNavigationApp.current()?.unregisterRouteProgressObserver(this.routeProgressObserver)
         MapboxNavigationApp.current()?.unregisterArrivalObserver(this.arrivalObserver)

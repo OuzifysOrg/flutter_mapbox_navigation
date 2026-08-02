@@ -81,6 +81,8 @@ public class FlutterMapboxNavigationView: NavigationFactory, FlutterPlatformView
                 strongSelf.startEmbeddedFreeDrive(arguments: arguments, result: result)
             } else if call.method == "startNavigation" {
                 strongSelf.startEmbeddedNavigation(arguments: arguments, result: result)
+            } else if call.method == "selectRoute" {
+                strongSelf.selectRoute(arguments: arguments, result: result)
             } else if call.method == "reCenter" {
                 strongSelf.navigationMapView?.update(navigationCameraState: .following)
             } else {
@@ -189,7 +191,10 @@ public class FlutterMapboxNavigationView: NavigationFactory, FlutterPlatformView
                     .calculateRoutes(options: self._options!)
                     .value
                 self.navigationRoutes = routes
-                self.sendEvent(eventType: MapBoxEventType.route_built)
+                self.sendEvent(
+                    eventType: MapBoxEventType.route_built,
+                    data: self.routeSummariesJson(routes)
+                )
                 self.navigationMapView?.showcase(
                     routes,
                     routesPresentationStyle: .all(shouldFit: true),
@@ -200,6 +205,69 @@ public class FlutterMapboxNavigationView: NavigationFactory, FlutterPlatformView
                 self.sendEvent(eventType: MapBoxEventType.route_build_failed)
                 flutterResult(false)
             }
+        }
+    }
+
+    /// Compact per-route summaries for the Dart preview sheet — index, label,
+    /// duration and distance, primary first. Matches the Android payload.
+    private func routeSummariesJson(_ routes: NavigationRoutes) -> String {
+        var all: [[String: Any]] = []
+        let main = routes.mainRoute.route
+        all.append([
+            "index": 0,
+            "label": main.description,
+            "durationS": main.expectedTravelTime,
+            "distanceM": main.distance,
+        ])
+        for (i, alt) in routes.alternativeRoutes.enumerated() {
+            all.append([
+                "index": i + 1,
+                "label": alt.route.description,
+                "durationS": alt.route.expectedTravelTime,
+                "distanceM": alt.route.distance,
+            ])
+        }
+        guard let data = try? JSONSerialization.data(withJSONObject: all),
+              let json = String(data: data, encoding: .utf8) else { return "[]" }
+        return json
+    }
+
+    /// Programmatic twin of the preview map tap — index into the order the
+    /// last route_built reported: 0 is the primary, 1… are alternatives.
+    @MainActor
+    func selectRoute(arguments: NSDictionary?, result: @escaping FlutterResult) {
+        guard _navigationViewController == nil,
+              let index = arguments?["index"] as? Int,
+              let current = self.navigationRoutes
+        else {
+            result(false)
+            return
+        }
+        if index == 0 {
+            result(true)
+            return
+        }
+        let altIndex = index - 1
+        guard current.alternativeRoutes.indices.contains(altIndex) else {
+            result(false)
+            return
+        }
+        Task { @MainActor in
+            guard let promoted = await current.selectingAlternativeRoute(at: altIndex) else {
+                result(false)
+                return
+            }
+            self.navigationRoutes = promoted
+            self.navigationMapView?.showcase(
+                promoted,
+                routesPresentationStyle: .all(shouldFit: false),
+                animated: true
+            )
+            self.sendEvent(
+                eventType: MapBoxEventType.route_built,
+                data: self.routeSummariesJson(promoted)
+            )
+            result(true)
         }
     }
 
@@ -308,9 +376,12 @@ extension FlutterMapboxNavigationView: NavigationMapViewDelegate {
                 routesPresentationStyle: .all(shouldFit: false),
                 animated: true
             )
-            // Same event the initial build sends: the Dart side re-reads
-            // durations/ETA off it, and Start now begins on the promoted route.
-            self.sendEvent(eventType: MapBoxEventType.route_built)
+            // Same event the initial build sends: the Dart side re-reads the
+            // summaries off it, and Start now begins on the promoted route.
+            self.sendEvent(
+                eventType: MapBoxEventType.route_built,
+                data: self.routeSummariesJson(promoted)
+            )
         }
     }
 }
@@ -349,7 +420,10 @@ extension FlutterMapboxNavigationView: UIGestureRecognizerDelegate {
                     .calculateRoutes(options: self._options!)
                     .value
                 self.navigationRoutes = routes
-                self.sendEvent(eventType: MapBoxEventType.route_built)
+                self.sendEvent(
+                    eventType: MapBoxEventType.route_built,
+                    data: self.routeSummariesJson(routes)
+                )
                 self.navigationMapView?.showcase(
                     routes,
                     routesPresentationStyle: .all(shouldFit: true),

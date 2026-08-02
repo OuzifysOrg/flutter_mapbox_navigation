@@ -104,6 +104,14 @@ class MapBoxNavigationViewController {
     return _methodChannel.invokeMethod('clearRoute', null);
   }
 
+  /// Promote a route from the last route_built event to primary — the
+  /// programmatic twin of tapping its line at preview. [index] is into the
+  /// order route_built reported: 0 is the primary, 1… the alternatives.
+  /// Preview only; returns false during guidance or for a stale index.
+  Future<bool?> selectRoute(int index) async {
+    return _methodChannel.invokeMethod('selectRoute', {'index': index});
+  }
+
   /// Starts Free Drive Mode
   Future<bool?> startFreeDrive({MapBoxOptions? options}) async {
     Map<String, dynamic>? args;
