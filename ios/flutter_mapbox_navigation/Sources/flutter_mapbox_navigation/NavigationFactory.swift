@@ -31,6 +31,7 @@ public class NavigationFactory: NSObject, FlutterStreamHandler {
     var _options: NavigationRouteOptions?
     var _simulateRoute = false
     var _allowsUTurnAtWayPoints: Bool?
+    var _alternatives: Bool?
     var _isOptimized = false
     var _language = "en"
     var _voiceUnits = "imperial"
@@ -222,6 +223,14 @@ public class NavigationFactory: NSObject, FlutterStreamHandler {
             options.allowsUTurnAtWaypoint = allowsUTurns
         }
 
+        // NavigationRouteOptions' init hardcodes includesAlternativeRoutes =
+        // true (v3.27.0, Routing/NavigationRouteOptions.swift:60), which is why
+        // alternatives appeared even while this flag was ignored. Honouring it
+        // matters for the `false` case.
+        if let alternatives = _alternatives {
+            options.includesAlternativeRoutes = alternatives
+        }
+
         options.distanceMeasurementSystem = _voiceUnits == "imperial" ? .imperial : .metric
         options.locale = Locale(identifier: _language)
         _options = options
@@ -233,6 +242,7 @@ public class NavigationFactory: NSObject, FlutterStreamHandler {
         _simulateRoute = arguments?["simulateRoute"] as? Bool ?? _simulateRoute
         _isOptimized = arguments?["isOptimized"] as? Bool ?? _isOptimized
         _allowsUTurnAtWayPoints = arguments?["allowsUTurnAtWayPoints"] as? Bool
+        _alternatives = arguments?["alternatives"] as? Bool ?? _alternatives
         _navigationMode = arguments?["mode"] as? String ?? "drivingWithTraffic"
         _showReportFeedbackButton = arguments?["showReportFeedbackButton"] as? Bool ?? _showReportFeedbackButton
         _showEndOfRouteFeedback = arguments?["showEndOfRouteFeedback"] as? Bool ?? _showEndOfRouteFeedback

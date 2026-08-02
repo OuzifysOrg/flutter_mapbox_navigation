@@ -96,6 +96,12 @@ dependencies {
     implementation "com.mapbox.navigationcore:ui-components:3.27.0"
     implementation "com.mapbox.navigationcore:tripdata:3.27.0"
     implementation "com.mapbox.navigationcore:voice:3.27.0"
+    // #54 car map: MapboxCarMap + the surface renderer for Android Auto's
+    // NavigationTemplate. `api`, not `implementation` — the app's native car
+    // screens (android/app/.../car/) compile against these classes through the
+    // plugin's project dependency. Same 3.27.0 pin as everything above; its
+    // transitive maps-androidauto:11.27.0 matches the resolved Maps SDK.
+    api "com.mapbox.navigationcore:android-auto-components:3.27.0"
     implementation "org.jetbrains.kotlin:kotlin-stdlib-jdk7:$kotlin_version"
     implementation 'com.jakewharton.timber:timber:4.7.1'
     implementation 'com.google.code.gson:gson:2.8.9'

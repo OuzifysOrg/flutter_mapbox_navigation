@@ -30,6 +30,7 @@ import com.mapbox.maps.ImageHolder
 import com.mapbox.maps.Style
 import com.mapbox.maps.plugin.LocationPuck2D
 import com.mapbox.maps.plugin.animation.camera
+import com.mapbox.maps.plugin.gestures.addOnMapClickListener
 import com.mapbox.maps.plugin.locationcomponent.location
 import com.mapbox.navigation.base.TimeFormat
 import com.mapbox.navigation.base.extensions.applyDefaultNavigationOptions
@@ -187,6 +188,15 @@ open class TurnByTurn(
             this.routeLineView.initializeLayers(style)
         }
 
+        // Route-preview taps: promote a tapped alternative to the primary
+        // route. Preview only — never during guidance (Harry, 2026-08-02;
+        // standard Mapbox behaviour). Returns false so camera gestures are
+        // unaffected.
+        this.binding.mapView.mapboxMap.addOnMapClickListener { point ->
+            this.onMapTapForRouteSelection(point)
+            false
+        }
+
         this.binding.recenter.setOnClickListener {
             this.navigationCamera.requestNavigationCameraToFollowing()
         }
@@ -311,8 +321,46 @@ open class TurnByTurn(
         )
     }
 
+    // Hit-test a preview tap against the drawn route lines and, when it lands
+    // on an alternative, make that the primary route. findClosestRoute is
+    // the SDK's own hit-test (verified in ui-maps 3.27.0); 30dp keeps parity
+    // with iOS's default tapGestureDistanceThreshold.
+    private fun onMapTapForRouteSelection(point: Point) {
+        if (this.isNavigationRunning) return
+        val routes = this.currentRoutes ?: return
+        if (routes.size < 2) return
+
+        val threshold = 30f * this.context.resources.displayMetrics.density
+        this.routeLineApi.findClosestRoute(
+            point,
+            this.binding.mapView.mapboxMap,
+            threshold
+        ) { expected ->
+            expected.value?.navigationRoute?.let { tapped ->
+                val current = this.currentRoutes ?: return@let
+                if (current.firstOrNull()?.id == tapped.id) return@let
+                val reordered = listOf(tapped) + current.filter { it.id != tapped.id }
+                this.currentRoutes = reordered
+                // Same event as the initial build, so the Dart side re-reads
+                // durations and Start begins on the promoted route.
+                PluginUtilities.sendEvent(
+                    MapBoxEvents.ROUTE_BUILT,
+                    Gson().toJson(reordered.map { it.directionsRoute.toJson() })
+                )
+                this.routeLineApi.setNavigationRoutes(reordered) { value ->
+                    this.binding.mapView.mapboxMap.style?.apply {
+                        this@TurnByTurn.routeLineView.renderRouteDrawData(this, value)
+                    }
+                }
+                this.viewportDataSource.onRouteChanged(reordered.first())
+                this.viewportDataSource.evaluate()
+            }
+        }
+    }
+
     private fun clearRoute(methodCall: MethodCall, result: MethodChannel.Result) {
         this.currentRoutes = null
+        this.isNavigationRunning = false
         MapboxNavigationApp.current()?.setNavigationRoutes(listOf())
         PluginUtilities.sendEvent(MapBoxEvents.NAVIGATION_CANCELLED)
     }
@@ -365,6 +413,7 @@ open class TurnByTurn(
             navigation.startTripSession(withForegroundService = false)
         }
         this.navigationCamera.requestNavigationCameraToFollowing()
+        this.isNavigationRunning = true
         PluginUtilities.sendEvent(MapBoxEvents.NAVIGATION_RUNNING)
     }
 
@@ -388,6 +437,7 @@ open class TurnByTurn(
             navigation.mapboxReplayer.clearEvents()
         }
         this.isNavigationCanceled = true
+        this.isNavigationRunning = false
         PluginUtilities.sendEvent(MapBoxEvents.NAVIGATION_CANCELLED)
     }
 
@@ -545,6 +595,10 @@ open class TurnByTurn(
     private var isOptimized = false
 
     private var currentRoutes: List<NavigationRoute>? = null
+
+    // True between startNavigation and finish/clear — the preview-only guard
+    // for tap-to-select. Distinct from isNavigationCanceled, which latches.
+    private var isNavigationRunning = false
     private var isNavigationCanceled = false
 
     /**

@@ -118,6 +118,11 @@ public class FlutterMapboxNavigationView: NavigationFactory, FlutterPlatformView
         mapView.autoresizingMask = [.flexibleWidth, .flexibleHeight]
         containerView.addSubview(mapView)
         navigationMapView = mapView
+        // Route-preview taps: the map's own tap recognizer hit-tests
+        // alternative route lines and reports through this delegate
+        // (NavigationMapView+Gestures.didReceiveTap). Without it, alternatives
+        // are drawn by showcase() but taps go nowhere — the defect Harry hit.
+        mapView.delegate = self
         _mapInitialized = true
 
         if self.arguments != nil {
@@ -280,6 +285,33 @@ public class FlutterMapboxNavigationView: NavigationFactory, FlutterPlatformView
             toItem: holderView, attribute: .right, multiplier: 1.0, constant: padding
         )
         holderView.addConstraints([pinTop, pinBottom, pinLeft, pinRight])
+    }
+}
+
+extension FlutterMapboxNavigationView: NavigationMapViewDelegate {
+    /// Route choice happens at preview only — after the routes are built,
+    /// before Start (Harry, 2026-08-02; standard Mapbox behaviour). During
+    /// guidance the child NavigationViewController owns the map and this
+    /// preview map view is covered, so the guard is belt-and-braces.
+    public func navigationMapView(
+        _ navigationMapView: NavigationMapView,
+        didSelect alternativeRoute: AlternativeRoute
+    ) {
+        guard _navigationViewController == nil else { return }
+        Task { @MainActor in
+            guard let current = self.navigationRoutes,
+                  let promoted = await current.selecting(alternativeRoute: alternativeRoute)
+            else { return }
+            self.navigationRoutes = promoted
+            self.navigationMapView?.showcase(
+                promoted,
+                routesPresentationStyle: .all(shouldFit: false),
+                animated: true
+            )
+            // Same event the initial build sends: the Dart side re-reads
+            // durations/ETA off it, and Start now begins on the promoted route.
+            self.sendEvent(eventType: MapBoxEventType.route_built)
+        }
     }
 }
 
