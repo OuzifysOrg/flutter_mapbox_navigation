@@ -55,12 +55,26 @@ public class NavigationFactory: NSObject, FlutterStreamHandler {
 
     @MainActor
     func ensureProvider() -> MapboxNavigationProvider {
-        if let provider = NavigationFactory.sharedProvider { return provider }
+        NavigationFactory.ensureSharedProvider(simulate: _simulateRoute)
+    }
+
+    /// The app-wide provider, exposed for **CarPlay**.
+    ///
+    /// A host app integrating `CarPlayManager` must hand it the SAME
+    /// `MapboxNavigationProvider` this plugin uses, or the car and the phone
+    /// end up with two navigation sessions and two versions of the truth
+    /// about the current route. This is the only supported way to get it.
+    ///
+    /// - Parameter simulate: only honoured if the provider does not exist
+    ///   yet — `locationSource` is fixed at creation.
+    @MainActor
+    public static func ensureSharedProvider(simulate: Bool = false) -> MapboxNavigationProvider {
+        if let provider = sharedProvider { return provider }
         let config = CoreConfig(
-            locationSource: _simulateRoute ? .simulation(initialLocation: nil) : .live
+            locationSource: simulate ? .simulation(initialLocation: nil) : .live
         )
         let provider = MapboxNavigationProvider(coreConfig: config)
-        NavigationFactory.sharedProvider = provider
+        sharedProvider = provider
         return provider
     }
 
