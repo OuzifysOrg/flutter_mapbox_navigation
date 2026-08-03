@@ -3,7 +3,6 @@ import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
-import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
 import 'package:flutter_mapbox_navigation/src/embedded/controller.dart';
@@ -45,31 +44,17 @@ class MapBoxNavigationView extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     if (Platform.isAndroid) {
-      // using Hybrid Composition
-      return PlatformViewLink(
+      // Match Mapbox's maintained Flutter Maps integration: let Flutter host
+      // the map through its texture/virtual-display path. Forcing expensive
+      // hybrid composition around Mapbox's native render surface can abort the
+      // Flutter engine before the first map frame is drawn.
+      return AndroidView(
         viewType: viewType,
-        surfaceFactory: (context, controller) {
-          return AndroidViewSurface(
-            controller: controller as AndroidViewController,
-            gestureRecognizers: const <Factory<OneSequenceGestureRecognizer>>{},
-            hitTestBehavior: PlatformViewHitTestBehavior.opaque,
-          );
-        },
-        onCreatePlatformView: (params) {
-          return PlatformViewsService.initExpensiveAndroidView(
-            id: params.id,
-            viewType: viewType,
-            layoutDirection: TextDirection.ltr,
-            creationParams: options!.toMap(),
-            creationParamsCodec: const StandardMessageCodec(),
-            onFocus: () {
-              params.onFocusChanged(true);
-            },
-          )
-            ..addOnPlatformViewCreatedListener(params.onPlatformViewCreated)
-            ..addOnPlatformViewCreatedListener(_onPlatformViewCreated)
-            ..create();
-        },
+        layoutDirection: TextDirection.ltr,
+        onPlatformViewCreated: _onPlatformViewCreated,
+        gestureRecognizers: const <Factory<OneSequenceGestureRecognizer>>{},
+        creationParams: options!.toMap(),
+        creationParamsCodec: const StandardMessageCodec(),
       );
     } else if (Platform.isIOS) {
       return UiKitView(

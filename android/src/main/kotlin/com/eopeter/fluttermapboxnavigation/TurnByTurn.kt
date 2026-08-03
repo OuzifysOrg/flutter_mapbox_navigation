@@ -107,9 +107,10 @@ open class TurnByTurn(
     }
 
     open fun initNavigation() {
-        MapboxNavigationApp
-            .setup(NavigationOptions.Builder(this.context).build())
-            .attach(this.activity as LifecycleOwner)
+        if (!MapboxNavigationApp.isSetup()) {
+            MapboxNavigationApp.setup(NavigationOptions.Builder(this.context).build())
+        }
+        MapboxNavigationApp.attach(this.activity as LifecycleOwner)
 
         // Camera + viewport
         this.viewportDataSource =
