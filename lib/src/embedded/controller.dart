@@ -127,6 +127,21 @@ class MapBoxNavigationViewController {
     return _methodChannel.invokeMethod('startNavigation', args);
   }
 
+  /// Whether embedded voice guidance is currently muted.
+  ///
+  /// iOS uses this while keeping its preview map mounted during guidance.
+  /// Android exposes Mapbox's native mute control instead.
+  Future<bool?> getVoiceMuted() {
+    return _methodChannel.invokeMethod<bool>('getVoiceMuted');
+  }
+
+  /// Mutes or unmutes embedded voice guidance and returns the applied state.
+  Future<bool?> setVoiceMuted(bool muted) {
+    return _methodChannel.invokeMethod<bool>('setVoiceMuted', {
+      'muted': muted,
+    });
+  }
+
   ///Ends Navigation and Closes the Navigation View
   Future<bool?> finishNavigation() async {
     final success = await _methodChannel.invokeMethod('finishNavigation');

@@ -30,10 +30,10 @@ private final class FlutterNavigationContainerView: UIView {
 ///    location/route-progress publishers (the publisher init is the SDK's
 ///    embedding path; it is SPI-marked, which is why Package.swift pins the
 ///    SDK to an EXACT version — an SPI surface must not drift underneath us);
-///  * active guidance: a child `NavigationViewController` added into the
-///    container, constructed exactly like the full-screen one;
-///  * progress events flow through `NavigationViewControllerDelegate`
-///    (v2's `NavigationServiceDelegate` route is gone).
+///  * active guidance: Mapbox Core drives the already-mounted preview map so
+///    Flutter can keep compositing it without a black platform-view surface;
+///  * progress events flow through Mapbox Core publishers (v2's
+///    `NavigationServiceDelegate` route is gone).
 ///
 /// The Flutter method/event channel contract is unchanged.
 public class FlutterMapboxNavigationView: NavigationFactory, FlutterPlatformView {
@@ -114,6 +114,10 @@ public class FlutterMapboxNavigationView: NavigationFactory, FlutterPlatformView
                 strongSelf.startEmbeddedFreeDrive(arguments: arguments, result: result)
             } else if call.method == "startNavigation" {
                 strongSelf.startEmbeddedNavigation(arguments: arguments, result: result)
+            } else if call.method == "getVoiceMuted" {
+                result(strongSelf.getVoiceMuted())
+            } else if call.method == "setVoiceMuted" {
+                strongSelf.setVoiceMuted(arguments: arguments, result: result)
             } else if call.method == "selectRoute" {
                 strongSelf.selectRoute(arguments: arguments, result: result)
             } else if call.method == "reCenter" {
@@ -423,6 +427,26 @@ public class FlutterMapboxNavigationView: NavigationFactory, FlutterPlatformView
         core.tripSession().startActiveGuidance(with: routes, startLegIndex: 0)
         navigationMapView?.update(navigationCameraState: .following)
         result(true)
+    }
+
+    @MainActor
+    private func getVoiceMuted() -> Bool {
+        ensureProvider().routeVoiceController.speechSynthesizer.muted
+    }
+
+    @MainActor
+    private func setVoiceMuted(arguments: NSDictionary?, result: @escaping FlutterResult) {
+        guard let muted = arguments?["muted"] as? Bool else {
+            result(FlutterError(
+                code: "invalid_voice_state",
+                message: "setVoiceMuted requires a boolean muted value",
+                details: nil
+            ))
+            return
+        }
+        let synthesizer = ensureProvider().routeVoiceController.speechSynthesizer
+        synthesizer.muted = muted
+        result(synthesizer.muted)
     }
 
     @MainActor
