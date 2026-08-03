@@ -288,6 +288,8 @@ public class NavigationFactory: NSObject, FlutterStreamHandler {
                     }
                 })
             }
+        } else if let result {
+            result(true)
         }
     }
 

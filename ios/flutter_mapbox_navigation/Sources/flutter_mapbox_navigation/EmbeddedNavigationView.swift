@@ -58,6 +58,14 @@ public class FlutterMapboxNavigationView: NavigationFactory, FlutterPlatformView
     /// until layout has moved Mapbox beyond its 64×64 startup rectangle.
     private var pendingShowcase: (routes: NavigationRoutes, shouldFit: Bool)?
 
+    /// iOS active guidance stays on the already-rendering preview map. Moving
+    /// its Metal-backed MapView into NavigationViewController makes Flutter's
+    /// platform-view surface black even though route progress and voice keep
+    /// running. Subscribe to Core directly instead of reparenting that view.
+    private var embeddedGuidanceSubscriptions = Set<AnyCancellable>()
+    private var embeddedGuidanceActive = false
+    private var embeddedArrivalSent = false
+
     var _mapInitialized = false
     var locationManager = CLLocationManager()
 
@@ -127,10 +135,6 @@ public class FlutterMapboxNavigationView: NavigationFactory, FlutterPlatformView
     @MainActor
     private func containerDidLayout(_ bounds: CGRect) {
         guard bounds.width > 64, bounds.height > 64 else { return }
-        if let guidanceController = _navigationViewController {
-            layoutGuidanceView(guidanceController, in: bounds)
-            return
-        }
         if !_mapInitialized {
             setupMapView()
         }
@@ -157,24 +161,6 @@ public class FlutterMapboxNavigationView: NavigationFactory, FlutterPlatformView
         mapView.layoutIfNeeded()
         mapView.mapView.setNeedsLayout()
         mapView.mapView.layoutIfNeeded()
-    }
-
-    @MainActor
-    private func layoutGuidanceView(
-        _ controller: NavigationViewController,
-        in bounds: CGRect
-    ) {
-        controller.view.frame = bounds
-        // This method is also called from containerView.layoutSubviews().
-        // Never force another layout pass on the container from inside that
-        // callback: doing so recursively re-enters layoutSubviews and blocks
-        // the main thread as soon as guidance starts.
-        controller.view.setNeedsLayout()
-        controller.view.layoutIfNeeded()
-        controller.navigationMapView?.setNeedsLayout()
-        controller.navigationMapView?.layoutIfNeeded()
-        controller.navigationMapView?.mapView.setNeedsLayout()
-        controller.navigationMapView?.mapView.layoutIfNeeded()
     }
 
     @MainActor
@@ -255,6 +241,9 @@ public class FlutterMapboxNavigationView: NavigationFactory, FlutterPlatformView
     func clearRoute(arguments: NSDictionary?, result: @escaping FlutterResult) {
         if navigationRoutes == nil { return }
         NavigationFactory.sharedProvider?.mapboxNavigation.tripSession().setToIdle()
+        embeddedGuidanceSubscriptions.removeAll()
+        embeddedGuidanceActive = false
+        embeddedArrivalSent = false
         navigationMapView?.removeRoutes()
         navigationRoutes = nil
         sendEvent(eventType: MapBoxEventType.navigation_cancelled)
@@ -338,6 +327,7 @@ public class FlutterMapboxNavigationView: NavigationFactory, FlutterPlatformView
     @MainActor
     func selectRoute(arguments: NSDictionary?, result: @escaping FlutterResult) {
         guard _navigationViewController == nil,
+              !embeddedGuidanceActive,
               let index = arguments?["index"] as? Int,
               let current = self.navigationRoutes
         else {
@@ -380,67 +370,67 @@ public class FlutterMapboxNavigationView: NavigationFactory, FlutterPlatformView
 
     @MainActor
     func startEmbeddedNavigation(arguments: NSDictionary?, result: @escaping FlutterResult) {
-        guard let routes = self.navigationRoutes,
-              let previewMapView = self.navigationMapView
-        else {
+        guard let routes = self.navigationRoutes else {
             result(false)
             return
         }
         prepareMapForCurrentLayout()
         let provider = ensureProvider()
+        let core = provider.mapboxNavigation
 
-        var dayStyle: DayStyle = CustomDayStyle()
-        if _mapStyleUrlDay != nil {
-            dayStyle = CustomDayStyle(url: _mapStyleUrlDay)
-        }
-        let nightStyle = CustomNightStyle()
-        if _mapStyleUrlNight != nil {
-            nightStyle.mapStyleURL = URL(string: _mapStyleUrlNight!)!
-        }
+        // Accessing the provider's shared voice controller creates its Core
+        // route-progress subscription. It does not require NavigationUIKit.
+        _ = provider.routeVoiceController
 
-        let navigationOptions = NavigationOptions(
-            mapboxNavigation: provider.mapboxNavigation,
-            voiceController: provider.routeVoiceController,
-            eventsManager: provider.eventsManager(),
-            styles: [dayStyle, nightStyle],
-            predictiveCacheManager: provider.predictiveCacheManager,
-            // Reuse the already-visible, correctly-sized preview map. Creating
-            // a second NavigationMapView here leaves Mapbox at its 64×64
-            // startup rectangle while viewDidLoad applies guidance padding,
-            // producing a black map even though voice guidance is active.
-            navigationMapView: previewMapView
-        )
+        embeddedGuidanceSubscriptions.removeAll()
+        embeddedArrivalSent = false
 
-        // Remove a previous child controller, if any.
-        if _navigationViewController?.view != nil {
-            _navigationViewController!.view.removeFromSuperview()
-            _navigationViewController?.removeFromParent()
-        }
+        core.navigation().locationMatching
+            .map(\.enhancedLocation)
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] location in
+                self?._lastKnownLocation = location
+            }
+            .store(in: &embeddedGuidanceSubscriptions)
 
-        let navigationViewController = NavigationViewController(
-            navigationRoutes: routes,
-            navigationOptions: navigationOptions
-        )
-        navigationViewController.delegate = self
-        navigationViewController.showsReportFeedback = _showReportFeedbackButton
-        navigationViewController.showsEndOfRouteFeedback = _showEndOfRouteFeedback
-        _navigationViewController = navigationViewController
+        core.navigation().routeProgress
+            .compactMap { $0?.routeProgress }
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] progress in
+                guard let self else { return }
+                self._distanceRemaining = progress.distanceRemaining
+                self._durationRemaining = progress.durationRemaining
+                self.sendEvent(eventType: MapBoxEventType.navigation_running)
 
-        guard let flutterViewController = rootFlutterViewController() else {
-            result(false)
-            return
-        }
-        flutterViewController.addChild(navigationViewController)
-        navigationViewController.view.frame = containerView.bounds
-        containerView.addSubview(navigationViewController.view)
-        navigationViewController.view.translatesAutoresizingMaskIntoConstraints = false
-        constraintsWithPaddingBetween(holderView: containerView, topView: navigationViewController.view, padding: 0.0)
-        navigationViewController.didMove(toParent: flutterViewController)
-        layoutGuidanceView(navigationViewController, in: containerView.bounds)
-        navigationViewController.navigationMapView?.navigationCamera.update(
-            cameraState: .following
-        )
+                if let sink = self._eventSink,
+                   let data = try? JSONEncoder().encode(MapBoxRouteProgressEvent(progress: progress)),
+                   let json = String(data: data, encoding: .ascii)
+                {
+                    sink(json)
+                }
+
+                if !self.embeddedArrivalSent,
+                   progress.isFinalLeg,
+                   progress.currentLegProgress.userHasArrivedAtWaypoint
+                {
+                    self.embeddedArrivalSent = true
+                    self.sendEvent(eventType: MapBoxEventType.on_arrival, data: "true")
+                }
+            }
+            .store(in: &embeddedGuidanceSubscriptions)
+
+        embeddedGuidanceActive = true
+        core.tripSession().startActiveGuidance(with: routes, startLegIndex: 0)
+        navigationMapView?.update(navigationCameraState: .following)
         result(true)
+    }
+
+    @MainActor
+    override func endNavigation(result: FlutterResult?) {
+        embeddedGuidanceSubscriptions.removeAll()
+        embeddedGuidanceActive = false
+        embeddedArrivalSent = false
+        super.endNavigation(result: result)
     }
 
     func constraintsWithPaddingBetween(holderView: UIView, topView: UIView, padding: CGFloat) {
@@ -475,7 +465,7 @@ extension FlutterMapboxNavigationView: NavigationMapViewDelegate {
         _ navigationMapView: NavigationMapView,
         didSelect alternativeRoute: AlternativeRoute
     ) {
-        guard _navigationViewController == nil else { return }
+        guard _navigationViewController == nil, !embeddedGuidanceActive else { return }
         Task { @MainActor in
             guard let current = self.navigationRoutes,
                   let promoted = await current.selecting(alternativeRoute: alternativeRoute)
