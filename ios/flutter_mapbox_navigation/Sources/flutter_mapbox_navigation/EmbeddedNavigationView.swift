@@ -7,6 +7,19 @@ import MapboxDirections
 @_spi(ExperimentalMapboxAPI) import MapboxNavigationCore
 import MapboxNavigationUIKit
 
+/// Flutter may ask for the platform view before its final UIKit frame has been
+/// applied. Mapbox's NavigationMapView intentionally starts at 64×64, which is
+/// too small for its route-camera padding. Forward every real layout pass so
+/// the owner can resize Mapbox before calling `showcase()`.
+private final class FlutterNavigationContainerView: UIView {
+    var onLayout: ((CGRect) -> Void)?
+
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        onLayout?(bounds)
+    }
+}
+
 /// The embedded platform view (`FlutterMapboxNavigationView`), rebuilt on
 /// Navigation SDK v3.
 ///
@@ -35,10 +48,15 @@ public class FlutterMapboxNavigationView: NavigationFactory, FlutterPlatformView
 
     /// The container the Flutter engine composits; hosts the preview map and,
     /// during guidance, the child NavigationViewController's view.
-    private let containerView: UIView
+    private let containerView: FlutterNavigationContainerView
     var navigationMapView: NavigationMapView?
 
     var navigationRoutes: NavigationRoutes?
+
+    /// A route may finish calculating before Flutter has assigned the native
+    /// view its real phone-sized frame. Keep the latest presentation request
+    /// until layout has moved Mapbox beyond its 64×64 startup rectangle.
+    private var pendingShowcase: (routes: NavigationRoutes, shouldFit: Bool)?
 
     var _mapInitialized = false
     var locationManager = CLLocationManager()
@@ -51,9 +69,16 @@ public class FlutterMapboxNavigationView: NavigationFactory, FlutterPlatformView
         self.messenger = messenger
         self.channel = FlutterMethodChannel(name: "flutter_mapbox_navigation/\(viewId)", binaryMessenger: messenger)
         self.eventChannel = FlutterEventChannel(name: "flutter_mapbox_navigation/\(viewId)/events", binaryMessenger: messenger)
-        self.containerView = UIView(frame: frame)
+        self.containerView = FlutterNavigationContainerView(frame: frame)
 
         super.init()
+
+        self.containerView.onLayout = { [weak self] bounds in
+            guard let self else { return }
+            MainActor.assumeIsolated {
+                self.containerDidLayout(bounds)
+            }
+        }
 
         self.eventChannel.setStreamHandler(self)
 
@@ -94,15 +119,92 @@ public class FlutterMapboxNavigationView: NavigationFactory, FlutterPlatformView
 
     public func view() -> UIView {
         MainActor.assumeIsolated {
-            if !_mapInitialized {
-                setupMapView()
-            }
+            prepareMapForCurrentLayout()
         }
         return containerView
     }
 
     @MainActor
+    private func containerDidLayout(_ bounds: CGRect) {
+        guard bounds.width > 64, bounds.height > 64 else { return }
+        if let guidanceController = _navigationViewController {
+            layoutGuidanceView(guidanceController, in: bounds)
+            return
+        }
+        if !_mapInitialized {
+            setupMapView()
+        }
+        layoutMapView(in: bounds)
+        flushPendingShowcaseIfPossible()
+    }
+
+    @MainActor
+    private func prepareMapForCurrentLayout() {
+        let bounds = containerView.bounds
+        guard bounds.width > 64, bounds.height > 64 else { return }
+        if !_mapInitialized {
+            setupMapView()
+        }
+        layoutMapView(in: bounds)
+        flushPendingShowcaseIfPossible()
+    }
+
+    @MainActor
+    private func layoutMapView(in bounds: CGRect) {
+        guard let mapView = navigationMapView else { return }
+        mapView.frame = bounds
+        mapView.setNeedsLayout()
+        mapView.layoutIfNeeded()
+        mapView.mapView.setNeedsLayout()
+        mapView.mapView.layoutIfNeeded()
+    }
+
+    @MainActor
+    private func layoutGuidanceView(
+        _ controller: NavigationViewController,
+        in bounds: CGRect
+    ) {
+        controller.view.frame = bounds
+        containerView.setNeedsLayout()
+        containerView.layoutIfNeeded()
+        controller.view.setNeedsLayout()
+        controller.view.layoutIfNeeded()
+        controller.navigationMapView?.setNeedsLayout()
+        controller.navigationMapView?.layoutIfNeeded()
+        controller.navigationMapView?.mapView.setNeedsLayout()
+        controller.navigationMapView?.mapView.layoutIfNeeded()
+    }
+
+    @MainActor
+    private func requestShowcase(_ routes: NavigationRoutes, shouldFit: Bool) {
+        pendingShowcase = (routes, shouldFit)
+        prepareMapForCurrentLayout()
+    }
+
+    @MainActor
+    private func flushPendingShowcaseIfPossible() {
+        guard let request = pendingShowcase,
+              let mapView = navigationMapView
+        else { return }
+
+        // NavigationMapView and its inner MapView both start at 64×64. The
+        // default mobile camera needs substantially more vertical room for its
+        // maneuver/trip-progress padding, so never calculate it at startup
+        // size. A normal portrait or landscape phone viewport clears 320pt.
+        let size = mapView.mapView.bounds.size
+        guard size.width > 64, size.height > 320 else { return }
+
+        pendingShowcase = nil
+        mapView.showcase(
+            request.routes,
+            routesPresentationStyle: .all(shouldFit: request.shouldFit),
+            animated: true
+        )
+    }
+
+    @MainActor
     private func setupMapView() {
+        guard !_mapInitialized else { return }
         let provider = ensureProvider()
         let core = provider.mapboxNavigation
 
@@ -120,6 +222,7 @@ public class FlutterMapboxNavigationView: NavigationFactory, FlutterPlatformView
         mapView.autoresizingMask = [.flexibleWidth, .flexibleHeight]
         containerView.addSubview(mapView)
         navigationMapView = mapView
+        layoutMapView(in: containerView.bounds)
         // Route-preview taps: the map's own tap recognizer hit-tests
         // alternative route lines and reports through this delegate
         // (NavigationMapView+Gestures.didReceiveTap). Without it, alternatives
@@ -195,11 +298,7 @@ public class FlutterMapboxNavigationView: NavigationFactory, FlutterPlatformView
                     eventType: MapBoxEventType.route_built,
                     data: self.routeSummariesJson(routes)
                 )
-                self.navigationMapView?.showcase(
-                    routes,
-                    routesPresentationStyle: .all(shouldFit: true),
-                    animated: true
-                )
+                self.requestShowcase(routes, shouldFit: true)
                 flutterResult(true)
             } catch {
                 self.sendEvent(eventType: MapBoxEventType.route_build_failed)
@@ -258,11 +357,7 @@ public class FlutterMapboxNavigationView: NavigationFactory, FlutterPlatformView
                 return
             }
             self.navigationRoutes = promoted
-            self.navigationMapView?.showcase(
-                promoted,
-                routesPresentationStyle: .all(shouldFit: false),
-                animated: true
-            )
+            self.requestShowcase(promoted, shouldFit: false)
             self.sendEvent(
                 eventType: MapBoxEventType.route_built,
                 data: self.routeSummariesJson(promoted)
@@ -283,10 +378,13 @@ public class FlutterMapboxNavigationView: NavigationFactory, FlutterPlatformView
 
     @MainActor
     func startEmbeddedNavigation(arguments: NSDictionary?, result: @escaping FlutterResult) {
-        guard let routes = self.navigationRoutes else {
+        guard let routes = self.navigationRoutes,
+              let previewMapView = self.navigationMapView
+        else {
             result(false)
             return
         }
+        prepareMapForCurrentLayout()
         let provider = ensureProvider()
 
         var dayStyle: DayStyle = CustomDayStyle()
@@ -303,7 +401,12 @@ public class FlutterMapboxNavigationView: NavigationFactory, FlutterPlatformView
             voiceController: provider.routeVoiceController,
             eventsManager: provider.eventsManager(),
             styles: [dayStyle, nightStyle],
-            predictiveCacheManager: provider.predictiveCacheManager
+            predictiveCacheManager: provider.predictiveCacheManager,
+            // Reuse the already-visible, correctly-sized preview map. Creating
+            // a second NavigationMapView here leaves Mapbox at its 64×64
+            // startup rectangle while viewDidLoad applies guidance padding,
+            // producing a black map even though voice guidance is active.
+            navigationMapView: previewMapView
         )
 
         // Remove a previous child controller, if any.
@@ -326,10 +429,15 @@ public class FlutterMapboxNavigationView: NavigationFactory, FlutterPlatformView
             return
         }
         flutterViewController.addChild(navigationViewController)
+        navigationViewController.view.frame = containerView.bounds
         containerView.addSubview(navigationViewController.view)
         navigationViewController.view.translatesAutoresizingMaskIntoConstraints = false
         constraintsWithPaddingBetween(holderView: containerView, topView: navigationViewController.view, padding: 0.0)
         navigationViewController.didMove(toParent: flutterViewController)
+        layoutGuidanceView(navigationViewController, in: containerView.bounds)
+        navigationViewController.navigationMapView?.navigationCamera.update(
+            cameraState: .following
+        )
         result(true)
     }
 
@@ -371,11 +479,7 @@ extension FlutterMapboxNavigationView: NavigationMapViewDelegate {
                   let promoted = await current.selecting(alternativeRoute: alternativeRoute)
             else { return }
             self.navigationRoutes = promoted
-            self.navigationMapView?.showcase(
-                promoted,
-                routesPresentationStyle: .all(shouldFit: false),
-                animated: true
-            )
+            self.requestShowcase(promoted, shouldFit: false)
             // Same event the initial build sends: the Dart side re-reads the
             // summaries off it, and Start now begins on the promoted route.
             self.sendEvent(
@@ -424,11 +528,7 @@ extension FlutterMapboxNavigationView: UIGestureRecognizerDelegate {
                     eventType: MapBoxEventType.route_built,
                     data: self.routeSummariesJson(routes)
                 )
-                self.navigationMapView?.showcase(
-                    routes,
-                    routesPresentationStyle: .all(shouldFit: true),
-                    animated: true
-                )
+                self.requestShowcase(routes, shouldFit: true)
             } catch {
                 self.sendEvent(eventType: MapBoxEventType.route_build_failed)
             }
