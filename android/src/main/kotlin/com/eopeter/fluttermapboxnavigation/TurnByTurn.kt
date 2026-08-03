@@ -281,6 +281,7 @@ open class TurnByTurn(
     }
 
     private fun getRoute(context: Context) {
+        PluginUtilities.sendEvent(MapBoxEvents.ROUTE_BUILDING)
         MapboxNavigationApp.current()!!.requestRoutes(
             routeOptions = RouteOptions
                 .builder()
@@ -315,7 +316,10 @@ open class TurnByTurn(
                     reasons: List<RouterFailure>,
                     routeOptions: RouteOptions
                 ) {
-                    PluginUtilities.sendEvent(MapBoxEvents.ROUTE_BUILD_FAILED)
+                    PluginUtilities.sendEvent(
+                        MapBoxEvents.ROUTE_BUILD_FAILED,
+                        reasons.joinToString(separator = " | ")
+                    )
                 }
 
                 override fun onCanceled(

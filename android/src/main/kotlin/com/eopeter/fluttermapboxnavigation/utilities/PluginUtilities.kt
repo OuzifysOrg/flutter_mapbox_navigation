@@ -8,6 +8,7 @@ import android.os.Build
 import com.eopeter.fluttermapboxnavigation.FlutterMapboxNavigationPlugin
 import com.eopeter.fluttermapboxnavigation.models.MapBoxEvents
 import com.eopeter.fluttermapboxnavigation.models.MapBoxRouteProgressEvent
+import com.google.gson.Gson
 import io.flutter.plugin.common.MethodCall
 import java.io.ByteArrayInputStream
 import java.io.InputStream
@@ -49,7 +50,7 @@ class PluginUtilities {
                         "  \"data\": $data" +
                         "}" else "{" +
                         "  \"eventType\": \"${event.value}\"," +
-                        "  \"data\": \"$data\"" +
+                        "  \"data\": ${Gson().toJson(data)}" +
                         "}"
             FlutterMapboxNavigationPlugin.eventSink?.success(jsonString)
         }

@@ -27,6 +27,7 @@ class MapBoxNavigationViewController {
   ValueSetter<RouteEvent>? _routeEventNotifier;
 
   late StreamSubscription<RouteEvent> _routeEventSubscription;
+  bool _isListeningForRouteEvents = false;
 
   ///Current Device OS Version
   Future<String> get platformVersion => _methodChannel
@@ -82,13 +83,13 @@ class MapBoxNavigationViewController {
     }
 
     var i = 0;
-    final wayPointMap = {for (var e in pointList) i++: e};
+    final wayPointMap = {for (final e in pointList) i++: e};
 
     var args = <String, dynamic>{};
     if (options != null) args = options.toMap();
     args['wayPoints'] = wayPointMap;
 
-    _routeEventSubscription = _streamRouteEvent!.listen(_onProgressData);
+    _ensureRouteEventSubscription();
     return _methodChannel
         .invokeMethod('buildRoute', args)
         .then((dynamic result) => result as bool);
@@ -96,12 +97,12 @@ class MapBoxNavigationViewController {
 
   /// starts listening for events
   Future<void> initialize() async {
-    _routeEventSubscription = _streamRouteEvent!.listen(_onProgressData);
+    _ensureRouteEventSubscription();
   }
 
   /// Clear the built route and resets the map
   Future<bool?> clearRoute() async {
-    return _methodChannel.invokeMethod('clearRoute', null);
+    return _methodChannel.invokeMethod('clearRoute');
   }
 
   /// Promote a route from the last route_built event to primary — the
@@ -123,13 +124,12 @@ class MapBoxNavigationViewController {
   Future<bool?> startNavigation({MapBoxOptions? options}) async {
     Map<String, dynamic>? args;
     if (options != null) args = options.toMap();
-    //_routeEventSubscription = _streamRouteEvent.listen(_onProgressData);
     return _methodChannel.invokeMethod('startNavigation', args);
   }
 
   ///Ends Navigation and Closes the Navigation View
   Future<bool?> finishNavigation() async {
-    final success = await _methodChannel.invokeMethod('finishNavigation', null);
+    final success = await _methodChannel.invokeMethod('finishNavigation');
     return success as bool?;
   }
 
@@ -145,7 +145,20 @@ class MapBoxNavigationViewController {
   /// Call this to cancel the subscription to route events
   /// Add here future disposing methods
   void dispose() {
-    _routeEventSubscription.cancel();
+    if (!_isListeningForRouteEvents) return;
+    _isListeningForRouteEvents = false;
+    unawaited(_routeEventSubscription.cancel());
+  }
+
+  void _ensureRouteEventSubscription() {
+    // `initialize()` and `buildRoute()` are both public entry points. The old
+    // implementation listened in both, creating two activations for the same
+    // native EventChannel and then losing the first subscription reference.
+    // Android's stream handler has one event sink, so the second activation can
+    // replace/cancel the sink that should deliver route_built to Flutter.
+    if (_isListeningForRouteEvents) return;
+    _routeEventSubscription = _streamRouteEvent!.listen(_onProgressData);
+    _isListeningForRouteEvents = true;
   }
 
   void _onProgressData(RouteEvent event) {

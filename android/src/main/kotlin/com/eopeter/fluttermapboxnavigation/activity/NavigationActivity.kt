@@ -501,7 +501,10 @@ class NavigationActivity : AppCompatActivity() {
                 }
 
                 override fun onFailure(reasons: List<RouterFailure>, routeOptions: RouteOptions) {
-                    sendEvent(MapBoxEvents.ROUTE_BUILD_FAILED)
+                    sendEvent(
+                        MapBoxEvents.ROUTE_BUILD_FAILED,
+                        reasons.joinToString(separator = " | ")
+                    )
                 }
 
                 override fun onRoutesReady(
