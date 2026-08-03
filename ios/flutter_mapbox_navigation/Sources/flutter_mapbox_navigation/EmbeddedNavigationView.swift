@@ -165,8 +165,10 @@ public class FlutterMapboxNavigationView: NavigationFactory, FlutterPlatformView
         in bounds: CGRect
     ) {
         controller.view.frame = bounds
-        containerView.setNeedsLayout()
-        containerView.layoutIfNeeded()
+        // This method is also called from containerView.layoutSubviews().
+        // Never force another layout pass on the container from inside that
+        // callback: doing so recursively re-enters layoutSubviews and blocks
+        // the main thread as soon as guidance starts.
         controller.view.setNeedsLayout()
         controller.view.layoutIfNeeded()
         controller.navigationMapView?.setNeedsLayout()
