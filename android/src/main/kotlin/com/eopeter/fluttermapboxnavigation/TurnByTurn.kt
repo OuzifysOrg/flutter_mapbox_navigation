@@ -467,7 +467,15 @@ open class TurnByTurn(
             navigation.startReplayTripSession()
             this.startSimulation(routes.first().directionsRoute)
         } else {
-            navigation.startTripSession(withForegroundService = false)
+            // Guidance must survive a locked phone (the Android Auto cubby
+            // case): the idle preview session runs without a foreground
+            // service, and Android cuts background location without one. So
+            // real guidance restarts the session under the SDK's own
+            // NavigationNotificationService — declared with the location type
+            // and all three FOREGROUND_SERVICE*/POST_NOTIFICATIONS
+            // permissions in the navigation AAR's manifest (verified 3.27.0).
+            navigation.stopTripSession()
+            navigation.startTripSession(withForegroundService = true)
         }
         this.navigationCamera.requestNavigationCameraToFollowing()
         this.isNavigationRunning = true
@@ -504,6 +512,7 @@ open class TurnByTurn(
         }
     }
 
+    @SuppressLint("MissingPermission")
     private fun finishNavigation(isOffRouted: Boolean = false) {
         val navigation = MapboxNavigationApp.current() ?: return
         navigation.setNavigationRoutes(listOf())
@@ -513,6 +522,13 @@ open class TurnByTurn(
         }
         this.isNavigationCanceled = true
         this.isNavigationRunning = false
+        // Drop back to the serviceless idle session so the guidance
+        // notification clears the moment guidance ends, not when the view
+        // dies. The replay session never started a service to stop.
+        if (!this.simulateRoute) {
+            navigation.stopTripSession()
+            navigation.startTripSession(withForegroundService = false)
+        }
         // Guidance chrome off again — the host screen usually pops on
         // NAVIGATION_CANCELLED, but a preview that stays up should not keep
         // dead guidance buttons.
