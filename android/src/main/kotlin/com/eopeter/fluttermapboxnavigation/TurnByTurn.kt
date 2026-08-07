@@ -461,8 +461,12 @@ open class TurnByTurn(
         // The layout ships these invisible and only NavigationActivity's
         // setRouteAndStartNavigation ever showed them — embedded guidance had
         // a working but invisible mute button, i.e. no way to silence voice.
+        // The trip card too: the progress observer shows it on the first
+        // tick, but that tick needs a fix, and the card holds the stop
+        // button — waiting on GPS to allow stopping is the wrong order.
         this.binding.soundButton.visibility = View.VISIBLE
         this.binding.routeOverview.visibility = View.VISIBLE
+        this.binding.tripProgressCard.visibility = View.VISIBLE
         if (this.isVoiceInstructionsMuted) {
             this.binding.soundButton.mute()
         } else {
