@@ -728,6 +728,12 @@ open class TurnByTurn(
             if (value) {
                 this.binding.soundButton.muteAndExtend(1500L)
                 this.voiceInstructionsPlayer.volume(SpeechVolume(0f))
+                // ⚠️ Muted must mean NO audio focus, not zero-volume playback.
+                // A queued announcement played at volume 0 still ducks the
+                // driver's music — "random quiet points" (Harry, head unit,
+                // 2026-08-07). clear() drops anything in flight; the
+                // speechCallback below stops anything new reaching play().
+                this.voiceInstructionsPlayer.clear()
             } else {
                 this.binding.soundButton.unmuteAndExtend(1500L)
                 this.voiceInstructionsPlayer.volume(SpeechVolume(1f))
@@ -738,10 +744,21 @@ open class TurnByTurn(
         MapboxNavigationConsumer<Expected<SpeechError, SpeechValue>> { expected ->
             expected.fold(
                 { error ->
-                    this.voiceInstructionsPlayer.play(error.fallback, this.voiceCleanupCallback)
+                    // Generation is gated on mute, but a request already in
+                    // flight when the driver muted still lands here — clean
+                    // the audio file instead of playing it and ducking music.
+                    if (this.isVoiceInstructionsMuted) {
+                        this.speechApi.clean(error.fallback)
+                    } else {
+                        this.voiceInstructionsPlayer.play(error.fallback, this.voiceCleanupCallback)
+                    }
                 },
                 { value ->
-                    this.voiceInstructionsPlayer.play(value.announcement, this.voiceCleanupCallback)
+                    if (this.isVoiceInstructionsMuted) {
+                        this.speechApi.clean(value.announcement)
+                    } else {
+                        this.voiceInstructionsPlayer.play(value.announcement, this.voiceCleanupCallback)
+                    }
                 }
             )
         }
