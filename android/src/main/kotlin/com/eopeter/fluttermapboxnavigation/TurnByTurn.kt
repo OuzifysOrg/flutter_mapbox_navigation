@@ -223,6 +223,19 @@ open class TurnByTurn(
             "enableOfflineRouting" -> {
                 // not implemented on Android
             }
+            // Parity with the iOS embedded view: same channel, same {muted}
+            // argument, same applied-state reply. The setter drives the same
+            // field as the native sound button, so the two stay one truth.
+            "getVoiceMuted" -> {
+                result.success(this.isVoiceInstructionsMuted)
+            }
+            "setVoiceMuted" -> {
+                val muted = (methodCall.arguments as? Map<*, *>)?.get("muted") as? Boolean
+                if (muted != null) {
+                    this.isVoiceInstructionsMuted = muted
+                }
+                result.success(this.isVoiceInstructionsMuted)
+            }
             "buildRoute" -> {
                 this.buildRoute(methodCall, result)
             }

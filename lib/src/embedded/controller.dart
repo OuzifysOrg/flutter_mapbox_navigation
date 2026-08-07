@@ -129,8 +129,8 @@ class MapBoxNavigationViewController {
 
   /// Whether embedded voice guidance is currently muted.
   ///
-  /// iOS uses this while keeping its preview map mounted during guidance.
-  /// Android exposes Mapbox's native mute control instead.
+  /// Implemented on both platforms; on Android it reads/drives the same
+  /// state as the native sound button, so the two never disagree.
   Future<bool?> getVoiceMuted() {
     return _methodChannel.invokeMethod<bool>('getVoiceMuted');
   }
