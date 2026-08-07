@@ -458,6 +458,16 @@ open class TurnByTurn(
         }
         this.navigationCamera.requestNavigationCameraToFollowing()
         this.isNavigationRunning = true
+        // The layout ships these invisible and only NavigationActivity's
+        // setRouteAndStartNavigation ever showed them — embedded guidance had
+        // a working but invisible mute button, i.e. no way to silence voice.
+        this.binding.soundButton.visibility = View.VISIBLE
+        this.binding.routeOverview.visibility = View.VISIBLE
+        if (this.isVoiceInstructionsMuted) {
+            this.binding.soundButton.mute()
+        } else {
+            this.binding.soundButton.unmute()
+        }
         // Preview is over — clear it AFTER setNavigationRoutes so the empty
         // update is a no-op in the observer and the car surface hands over
         // from the preview lines to the active-guidance line.
@@ -486,6 +496,13 @@ open class TurnByTurn(
         }
         this.isNavigationCanceled = true
         this.isNavigationRunning = false
+        // Guidance chrome off again — the host screen usually pops on
+        // NAVIGATION_CANCELLED, but a preview that stays up should not keep
+        // dead guidance buttons.
+        this.binding.soundButton.visibility = View.INVISIBLE
+        this.binding.routeOverview.visibility = View.INVISIBLE
+        this.binding.tripProgressCard.visibility = View.INVISIBLE
+        this.binding.maneuverView.visibility = View.INVISIBLE
         navigation.setRoutesPreview(emptyList())
         PluginUtilities.sendEvent(MapBoxEvents.NAVIGATION_CANCELLED)
     }
