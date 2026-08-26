@@ -113,6 +113,18 @@ class MapBoxNavigationViewController {
     return _methodChannel.invokeMethod('selectRoute', {'index': index});
   }
 
+  /// Snap the camera back to following the puck — the programmatic twin of
+  /// the native recenter button (which iOS's embedded view does not have).
+  Future<bool?> reCenter() async {
+    return _methodChannel.invokeMethod('reCenter');
+  }
+
+  /// Fit the whole remaining route in view; following stops until
+  /// [reCenter] is called. Twin of Android's native routeOverview button.
+  Future<bool?> routeOverview() async {
+    return _methodChannel.invokeMethod('routeOverview');
+  }
+
   /// Starts Free Drive Mode
   Future<bool?> startFreeDrive({MapBoxOptions? options}) async {
     Map<String, dynamic>? args;

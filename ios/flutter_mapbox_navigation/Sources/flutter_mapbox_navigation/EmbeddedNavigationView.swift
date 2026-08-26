@@ -122,6 +122,12 @@ public class FlutterMapboxNavigationView: NavigationFactory, FlutterPlatformView
                 strongSelf.selectRoute(arguments: arguments, result: result)
             } else if call.method == "reCenter" {
                 strongSelf.navigationMapView?.update(navigationCameraState: .following)
+                result(true)
+            } else if call.method == "routeOverview" {
+                // Parity with Android's native routeOverview button: fit the
+                // whole remaining route, camera stops following until reCenter.
+                strongSelf.navigationMapView?.update(navigationCameraState: .overview)
+                result(true)
             } else {
                 result("method is not implemented")
             }

@@ -266,6 +266,16 @@ open class TurnByTurn(
             "finishNavigation" -> {
                 this.finishNavigation(methodCall, result)
             }
+            // Programmatic twins of the native recenter/routeOverview buttons,
+            // so both platforms answer the same channel methods.
+            "reCenter" -> {
+                this.navigationCamera.requestNavigationCameraToFollowing()
+                result.success(true)
+            }
+            "routeOverview" -> {
+                this.navigationCamera.requestNavigationCameraToOverview()
+                result.success(true)
+            }
             "getDistanceRemaining" -> {
                 result.success(this.distanceRemaining)
             }
