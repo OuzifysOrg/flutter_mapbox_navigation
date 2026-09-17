@@ -89,23 +89,29 @@ android {
 }
 
 dependencies {
+    // -ndk27 artifacts (2026-09-17, app #165): Mapbox's default artifacts are NDK 23
+    // builds whose native libraries are 4 KB-page aligned, and Google Play now
+    // requires 16 KB page-size support. The -ndk27 twins (same versions) pull
+    // ndk27 Maps, Common and Search transitively. ALL OR NOTHING: every Mapbox
+    // artifact here and in the consuming app must carry the suffix, or the two
+    // flavours clash at merge.
     // Mapbox Navigation SDK v3 (modular — v2's single artifact and its Drop-In
     // UI no longer exist; the UI is built from components in this plugin).
     // `api`: the consuming app's car code compiles against core types
     // (NavigationRoute, MapboxNavigationApp, RoutesPreview*) for the §7 route
     // preview — and android-auto-components' POM carries the core only at
     // runtime scope, so it cannot supply them to the compile classpath.
-    api "com.mapbox.navigationcore:navigation:3.27.0"
-    implementation "com.mapbox.navigationcore:ui-maps:3.27.0"
-    implementation "com.mapbox.navigationcore:ui-components:3.27.0"
-    implementation "com.mapbox.navigationcore:tripdata:3.27.0"
-    implementation "com.mapbox.navigationcore:voice:3.27.0"
+    api "com.mapbox.navigationcore:navigation-ndk27:3.27.0"
+    implementation "com.mapbox.navigationcore:ui-maps-ndk27:3.27.0"
+    implementation "com.mapbox.navigationcore:ui-components-ndk27:3.27.0"
+    implementation "com.mapbox.navigationcore:tripdata-ndk27:3.27.0"
+    implementation "com.mapbox.navigationcore:voice-ndk27:3.27.0"
     // #54 car map: MapboxCarMap + the surface renderer for Android Auto's
     // NavigationTemplate. `api`, not `implementation` — the app's native car
     // screens (android/app/.../car/) compile against these classes through the
     // plugin's project dependency. Same 3.27.0 pin as everything above; its
     // transitive maps-androidauto:11.27.0 matches the resolved Maps SDK.
-    api "com.mapbox.navigationcore:android-auto-components:3.27.0"
+    api "com.mapbox.navigationcore:android-auto-components-ndk27:3.27.0"
     implementation "org.jetbrains.kotlin:kotlin-stdlib-jdk7:$kotlin_version"
     implementation 'com.jakewharton.timber:timber:4.7.1'
     implementation 'com.google.code.gson:gson:2.8.9'
