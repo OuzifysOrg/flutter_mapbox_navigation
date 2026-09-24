@@ -36,6 +36,7 @@ import com.mapbox.navigation.base.TimeFormat
 import com.mapbox.navigation.base.extensions.applyDefaultNavigationOptions
 import com.mapbox.navigation.base.extensions.applyLanguageAndVoiceUnitOptions
 import com.mapbox.navigation.base.formatter.DistanceFormatterOptions
+import com.mapbox.navigation.base.formatter.UnitType
 import com.mapbox.navigation.base.options.NavigationOptions
 import com.mapbox.navigation.base.route.NavigationRoute
 import com.mapbox.navigation.base.route.NavigationRouterCallback
@@ -141,18 +142,7 @@ open class TurnByTurn(
             EdgeInsets(180.0 * density, 40.0 * density, 150.0 * density, 40.0 * density)
 
         // Trip data + views
-        val distanceFormatterOptions = DistanceFormatterOptions.Builder(this.context).build()
-        this.maneuverApi = MapboxManeuverApi(MapboxDistanceFormatter(distanceFormatterOptions))
-        this.tripProgressApi = MapboxTripProgressApi(
-            TripProgressUpdateFormatter.Builder(this.context)
-                .distanceRemainingFormatter(DistanceRemainingFormatter(distanceFormatterOptions))
-                .timeRemainingFormatter(TimeRemainingFormatter(this.context))
-                .percentRouteTraveledFormatter(PercentDistanceTraveledFormatter())
-                .estimatedTimeToArrivalFormatter(
-                    EstimatedTimeToArrivalFormatter(this.context, TimeFormat.NONE_SPECIFIED)
-                )
-                .build()
-        )
+        buildDistanceFormatters()
         this.speechApi = MapboxSpeechApi(this.context, this.navigationLanguage)
         this.voiceInstructionsPlayer =
             MapboxVoiceInstructionsPlayer(this.context, this.navigationLanguage)
@@ -550,6 +540,28 @@ open class TurnByTurn(
         PluginUtilities.sendEvent(MapBoxEvents.NAVIGATION_CANCELLED)
     }
 
+    // Banner and trip-progress distances follow the requested units, never
+    // the phone's locale: Mapbox's default is metric for en_GB, which showed
+    // km on UK screens while the voice said miles (RevBase #232).
+    private fun buildDistanceFormatters() {
+        val unitType =
+            if (navigationVoiceUnits == DirectionsCriteria.METRIC) UnitType.METRIC
+            else UnitType.IMPERIAL
+        val distanceFormatterOptions =
+            DistanceFormatterOptions.Builder(this.context).unitType(unitType).build()
+        this.maneuverApi = MapboxManeuverApi(MapboxDistanceFormatter(distanceFormatterOptions))
+        this.tripProgressApi = MapboxTripProgressApi(
+            TripProgressUpdateFormatter.Builder(this.context)
+                .distanceRemainingFormatter(DistanceRemainingFormatter(distanceFormatterOptions))
+                .timeRemainingFormatter(TimeRemainingFormatter(this.context))
+                .percentRouteTraveledFormatter(PercentDistanceTraveledFormatter())
+                .estimatedTimeToArrivalFormatter(
+                    EstimatedTimeToArrivalFormatter(this.context, TimeFormat.NONE_SPECIFIED)
+                )
+                .build()
+        )
+    }
+
     private fun setOptions(arguments: Map<*, *>) {
         val navMode = arguments["mode"] as? String
         if (navMode != null) {
@@ -579,6 +591,8 @@ open class TurnByTurn(
                 this.navigationVoiceUnits = DirectionsCriteria.METRIC
             }
         }
+        // Options can arrive after initNavigation built the formatters.
+        buildDistanceFormatters()
 
         this.mapStyleUrlDay = arguments["mapStyleUrlDay"] as? String
         this.mapStyleUrlNight = arguments["mapStyleUrlNight"] as? String

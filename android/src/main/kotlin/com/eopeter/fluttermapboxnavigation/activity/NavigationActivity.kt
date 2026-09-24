@@ -37,6 +37,8 @@ import com.mapbox.maps.plugin.locationcomponent.location
 import com.mapbox.navigation.base.extensions.applyDefaultNavigationOptions
 import com.mapbox.navigation.base.extensions.applyLanguageAndVoiceUnitOptions
 import com.mapbox.navigation.base.formatter.DistanceFormatterOptions
+import com.mapbox.navigation.base.formatter.UnitType
+import com.mapbox.api.directions.v5.DirectionsCriteria
 import com.mapbox.navigation.base.options.NavigationOptions
 import com.mapbox.navigation.base.route.NavigationRoute
 import com.mapbox.navigation.base.route.NavigationRouterCallback
@@ -317,7 +319,13 @@ class NavigationActivity : AppCompatActivity() {
         viewportDataSource.overviewPadding = overviewPadding
         viewportDataSource.followingPadding = followingPadding
 
-        val distanceFormatterOptions = DistanceFormatterOptions.Builder(this).build()
+        // Follow the requested units, never the locale (RevBase #232).
+        val unitType =
+            if (FlutterMapboxNavigationPlugin.navigationVoiceUnits == DirectionsCriteria.METRIC)
+                UnitType.METRIC
+            else UnitType.IMPERIAL
+        val distanceFormatterOptions =
+            DistanceFormatterOptions.Builder(this).unitType(unitType).build()
         maneuverApi = MapboxManeuverApi(MapboxDistanceFormatter(distanceFormatterOptions))
         tripProgressApi = MapboxTripProgressApi(
             TripProgressUpdateFormatter.Builder(this)
