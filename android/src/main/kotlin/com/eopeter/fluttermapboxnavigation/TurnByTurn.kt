@@ -28,10 +28,12 @@ import com.mapbox.geojson.Point
 import com.mapbox.maps.EdgeInsets
 import com.mapbox.maps.ImageHolder
 import com.mapbox.maps.Style
+import com.mapbox.maps.plugin.DistanceUnits
 import com.mapbox.maps.plugin.LocationPuck2D
 import com.mapbox.maps.plugin.animation.camera
 import com.mapbox.maps.plugin.gestures.addOnMapClickListener
 import com.mapbox.maps.plugin.locationcomponent.location
+import com.mapbox.maps.plugin.scalebar.scalebar
 import com.mapbox.navigation.base.TimeFormat
 import com.mapbox.navigation.base.extensions.applyDefaultNavigationOptions
 import com.mapbox.navigation.base.extensions.applyLanguageAndVoiceUnitOptions
@@ -549,6 +551,10 @@ open class TurnByTurn(
             else UnitType.IMPERIAL
         val distanceFormatterOptions =
             DistanceFormatterOptions.Builder(this.context).unitType(unitType).build()
+        // The map's scale bar too: its own default is metric everywhere but
+        // the US, Liberia and Myanmar, so it read km on UK phones (RevBase #233).
+        this.binding.mapView.scalebar.distanceUnits =
+            if (unitType == UnitType.METRIC) DistanceUnits.METRIC else DistanceUnits.IMPERIAL
         this.maneuverApi = MapboxManeuverApi(MapboxDistanceFormatter(distanceFormatterOptions))
         this.tripProgressApi = MapboxTripProgressApi(
             TripProgressUpdateFormatter.Builder(this.context)

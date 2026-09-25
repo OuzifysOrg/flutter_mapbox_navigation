@@ -30,10 +30,12 @@ import com.mapbox.common.location.Location
 import com.mapbox.geojson.Point
 import com.mapbox.maps.EdgeInsets
 import com.mapbox.maps.ImageHolder
+import com.mapbox.maps.plugin.DistanceUnits
 import com.mapbox.maps.plugin.LocationPuck2D
 import com.mapbox.maps.plugin.animation.camera
 import com.mapbox.maps.plugin.gestures.gestures
 import com.mapbox.maps.plugin.locationcomponent.location
+import com.mapbox.maps.plugin.scalebar.scalebar
 import com.mapbox.navigation.base.extensions.applyDefaultNavigationOptions
 import com.mapbox.navigation.base.extensions.applyLanguageAndVoiceUnitOptions
 import com.mapbox.navigation.base.formatter.DistanceFormatterOptions
@@ -326,6 +328,9 @@ class NavigationActivity : AppCompatActivity() {
             else UnitType.IMPERIAL
         val distanceFormatterOptions =
             DistanceFormatterOptions.Builder(this).unitType(unitType).build()
+        // The scale bar follows too; its own default is metric in the UK (RevBase #233).
+        binding.mapView.scalebar.distanceUnits =
+            if (unitType == UnitType.METRIC) DistanceUnits.METRIC else DistanceUnits.IMPERIAL
         maneuverApi = MapboxManeuverApi(MapboxDistanceFormatter(distanceFormatterOptions))
         tripProgressApi = MapboxTripProgressApi(
             TripProgressUpdateFormatter.Builder(this)
