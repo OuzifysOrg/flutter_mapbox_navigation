@@ -15,6 +15,7 @@ import android.view.View
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
 import com.eopeter.fluttermapboxnavigation.FlutterMapboxNavigationPlugin
+import com.eopeter.fluttermapboxnavigation.NavigationChrome
 import com.eopeter.fluttermapboxnavigation.R
 import com.eopeter.fluttermapboxnavigation.databinding.NavigationActivityBinding
 import com.eopeter.fluttermapboxnavigation.models.MapBoxEvents
@@ -137,6 +138,7 @@ class NavigationActivity : AppCompatActivity() {
     private var isVoiceInstructionsMuted = !FlutterMapboxNavigationPlugin.voiceInstructionsEnabled
         set(value) {
             field = value
+            NavigationChrome.describeSound(this, binding, value)
             if (value) {
                 binding.soundButton.muteAndExtend(BUTTON_ANIMATION_DURATION)
                 voiceInstructionsPlayer.volume(SpeechVolume(0f))
@@ -383,6 +385,7 @@ class NavigationActivity : AppCompatActivity() {
             cancelNavigation()
             finish()
         }
+        NavigationChrome.apply(this, binding)
         binding.recenter.setOnClickListener {
             navigationCamera.requestNavigationCameraToFollowing()
             binding.routeOverview.showTextAndExtend(BUTTON_ANIMATION_DURATION)
@@ -395,6 +398,7 @@ class NavigationActivity : AppCompatActivity() {
             isVoiceInstructionsMuted = !isVoiceInstructionsMuted
         }
         if (isVoiceInstructionsMuted) binding.soundButton.mute() else binding.soundButton.unmute()
+        NavigationChrome.describeSound(this, binding, isVoiceInstructionsMuted)
 
         // KEPT (Android 14 / API 34+): registerReceiver must declare an export
         // state or the activity crashes with a SecurityException on launch.

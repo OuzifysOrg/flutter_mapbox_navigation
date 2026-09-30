@@ -69,6 +69,11 @@ public class FlutterMapboxNavigationView: NavigationFactory, FlutterPlatformView
     var _mapInitialized = false
     var locationManager = CLLocationManager()
 
+    /// How far the host's Flutter chrome reaches in from the view's top and
+    /// bottom (setOrnamentInsets), and Mapbox's own margins before any lift.
+    private var ornamentInsets: (top: CGFloat, bottom: CGFloat) = (0, 0)
+    private var baseOrnamentMargins: (logo: CGFloat, attribution: CGFloat, scaleBar: CGFloat)?
+
     init(messenger: FlutterBinaryMessenger, frame: CGRect, viewId: Int64, args: Any?) {
         self.frame = frame
         self.viewId = viewId
@@ -123,6 +128,8 @@ public class FlutterMapboxNavigationView: NavigationFactory, FlutterPlatformView
             } else if call.method == "reCenter" {
                 strongSelf.navigationMapView?.update(navigationCameraState: .following)
                 result(true)
+            } else if call.method == "setOrnamentInsets" {
+                strongSelf.setOrnamentInsets(arguments: arguments, result: result)
             } else if call.method == "routeOverview" {
                 // Parity with Android's native routeOverview button: fit the
                 // whole remaining route, camera stops following until reCenter.
@@ -149,6 +156,7 @@ public class FlutterMapboxNavigationView: NavigationFactory, FlutterPlatformView
             setupMapView()
         }
         layoutMapView(in: bounds)
+        applyOrnamentInsets()
         flushPendingShowcaseIfPossible()
     }
 
@@ -433,6 +441,41 @@ public class FlutterMapboxNavigationView: NavigationFactory, FlutterPlatformView
         core.tripSession().startActiveGuidance(with: routes, startLegIndex: 0)
         navigationMapView?.update(navigationCameraState: .following)
         result(true)
+    }
+
+    @MainActor
+    private func setOrnamentInsets(arguments: NSDictionary?, result: @escaping FlutterResult) {
+        let top = (arguments?["top"] as? NSNumber)?.doubleValue ?? 0
+        let bottom = (arguments?["bottom"] as? NSNumber)?.doubleValue ?? 0
+        ornamentInsets = (CGFloat(top), CGFloat(bottom))
+        applyOrnamentInsets()
+        result(true)
+    }
+
+    /// Mapbox's logo and attribution (which its terms require to stay
+    /// visible) and the scale bar sit on the map's edges, under the host's
+    /// route sheet and close tile. Ornament margins count from the safe area
+    /// and the host's insets from the view's edges, so the safe area is taken
+    /// off, as Mapbox's own OrnamentsController does. RevBase #237.
+    @MainActor
+    private func applyOrnamentInsets() {
+        guard let mapView = navigationMapView?.mapView else { return }
+        var options = mapView.ornaments.options
+        let base = baseOrnamentMargins ?? (
+            logo: options.logo.margins.y,
+            attribution: options.attributionButton.margins.y,
+            scaleBar: options.scaleBar.margins.y
+        )
+        baseOrnamentMargins = base
+        let safe = mapView.safeAreaInsets
+        let bottomLift = max(0, ornamentInsets.bottom - safe.bottom)
+        let topLift = max(0, ornamentInsets.top - safe.top)
+        options.logo.margins.y = base.logo + bottomLift
+        options.attributionButton.margins.y = base.attribution + bottomLift
+        options.scaleBar.margins.y = base.scaleBar + topLift
+        if options != mapView.ornaments.options {
+            mapView.ornaments.options = options
+        }
     }
 
     @MainActor

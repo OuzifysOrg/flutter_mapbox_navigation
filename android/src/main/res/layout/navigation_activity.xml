@@ -14,13 +14,20 @@
         app:layout_constraintStart_toStartOf="parent"
         app:layout_constraintTop_toTopOf="parent" />
 
+    <!-- The trip panel sits on the app's surface with the screen gutter
+         (RevBase #243); NavigationChrome styles the Mapbox view inside. -->
     <androidx.cardview.widget.CardView
         android:id="@+id/tripProgressCard"
         android:layout_width="0dp"
         android:layout_height="wrap_content"
         android:visibility="invisible"
+        app:cardBackgroundColor="@color/revbase_nav_surface"
         app:cardElevation="8dp"
         app:cardUseCompatPadding="false"
+        app:contentPaddingBottom="@dimen/revbase_nav_gap"
+        app:contentPaddingLeft="@dimen/revbase_nav_gutter"
+        app:contentPaddingRight="@dimen/revbase_nav_gutter"
+        app:contentPaddingTop="@dimen/revbase_nav_gap"
         app:layout_constraintBottom_toBottomOf="parent"
         app:layout_constraintEnd_toEndOf="parent"
         app:layout_constraintStart_toStartOf="parent">
@@ -30,17 +37,24 @@
             android:layout_width="match_parent"
             android:layout_height="wrap_content" />
 
-        <!-- android:src, not app:srcCompat: the embedded platform view
-             inflates this layout inside a plain FlutterActivity, where the
-             AppCompat-only srcCompat attribute is silently dropped and the
-             stop button rendered as an invisible (but tappable) square. -->
-        <ImageView
+        <!-- END is a labelled text plate, the twin of the iOS overlay's, so a
+             screen reader announces it and it stays sharp at any density. -->
+        <TextView
             android:id="@+id/stop"
-            android:layout_width="48dp"
-            android:layout_height="48dp"
+            android:layout_width="wrap_content"
+            android:layout_height="42dp"
             android:layout_gravity="end|center_vertical"
-            android:layout_marginEnd="12dp"
-            android:src="@android:drawable/ic_delete" />
+            android:background="@drawable/revbase_nav_end_bg"
+            android:contentDescription="@string/revbase_nav_end_description"
+            android:fontFamily="monospace"
+            android:gravity="center"
+            android:minWidth="52dp"
+            android:paddingStart="12dp"
+            android:paddingEnd="12dp"
+            android:text="@string/revbase_nav_end"
+            android:textColor="@color/revbase_nav_on_end"
+            android:textSize="11sp"
+            android:textStyle="bold" />
     </androidx.cardview.widget.CardView>
 
     <com.mapbox.navigation.ui.components.maneuver.view.MapboxManeuverView

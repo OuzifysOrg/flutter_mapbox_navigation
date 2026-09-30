@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Mapbox's round map button (mapbox_bg_circle) on the app's surface tile
+     with its hairline, so it reads as the app's control in both themes. -->
+<shape xmlns:android="http://schemas.android.com/apk/res/android">
+    <solid android:color="@color/revbase_nav_surface" />
+    <stroke android:width="1dp" android:color="@color/revbase_nav_outline" />
+    <corners android:radius="56dp" />
+</shape>

@@ -125,6 +125,18 @@ class MapBoxNavigationViewController {
     return _methodChannel.invokeMethod('routeOverview');
   }
 
+  /// Keep the map's own logo, attribution and scale bar clear of Flutter
+  /// chrome laid over the view. [top] and [bottom] are how far that chrome
+  /// reaches in from the view's top and bottom edges, in logical pixels; 0
+  /// puts an ornament back at the SDK's own margin. On Android the guidance
+  /// trip panel is measured natively and lifts the bottom ornaments too.
+  Future<bool?> setOrnamentInsets({double top = 0, double bottom = 0}) {
+    return _methodChannel.invokeMethod<bool>('setOrnamentInsets', {
+      'top': top,
+      'bottom': bottom,
+    });
+  }
+
   /// Starts Free Drive Mode
   Future<bool?> startFreeDrive({MapBoxOptions? options}) async {
     Map<String, dynamic>? args;

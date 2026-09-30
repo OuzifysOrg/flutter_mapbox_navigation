@@ -1,0 +1,74 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- RevBase's tokens on Mapbox's phone guidance chrome (RevBase #243, #247).
+     Every name here is prefixed revbase_ on purpose: Mapbox's own colour
+     names are shared with android-auto-components, which redefines several
+     of them (black maneuver text at night) and wins the resource merge. -->
+<resources>
+    <!-- Surface, ink and outline from the app's light palette (rev_palette.dart). -->
+    <color name="revbase_nav_surface">#FFFFFF</color>
+    <color name="revbase_nav_ink">#141414</color>
+    <color name="revbase_nav_outline">#14000000</color>
+    <!-- END matches the iOS guidance overlay's plate. -->
+    <color name="revbase_nav_end">#C83737</color>
+    <color name="revbase_nav_on_end">#FFFFFF</color>
+
+    <dimen name="revbase_nav_gutter">18dp</dimen>
+    <dimen name="revbase_nav_gap">9dp</dimen>
+
+    <string name="revbase_nav_end">END</string>
+    <string name="revbase_nav_end_description">End guidance</string>
+    <string name="revbase_nav_recenter_description">Recentre on my position</string>
+    <string name="revbase_nav_overview_description">View whole route</string>
+    <string name="revbase_nav_mute_description">Turn voice guidance off</string>
+    <string name="revbase_nav_unmute_description">Turn voice guidance on</string>
+
+    <!-- Banner text: Mapbox's own phone colours, named so android-auto's
+         redefinitions of mapbox_*_maneuver_text_color cannot reach them. -->
+    <style name="RevBaseManeuverPrimary" parent="MapboxStylePrimaryManeuver">
+        <item name="android:textColor">@color/colorOnSecondary</item>
+    </style>
+    <style name="RevBaseManeuverSecondary" parent="MapboxStyleSecondaryManeuver">
+        <item name="android:textColor">@color/colorOnSecondary</item>
+    </style>
+    <style name="RevBaseManeuverSub" parent="MapboxStyleSubManeuver">
+        <item name="android:textColor">@color/colorOnSecondaryVariant</item>
+    </style>
+    <style name="RevBaseExitPrimary" parent="MapboxStyleExitTextForPrimary">
+        <item name="android:textColor">@color/colorOnSurface</item>
+    </style>
+    <style name="RevBaseExitSecondary" parent="MapboxStyleExitTextForSecondary">
+        <item name="android:textColor">@color/colorOnSurface</item>
+    </style>
+    <style name="RevBaseExitSub" parent="MapboxStyleExitTextForSub">
+        <item name="android:textColor">@color/colorOnSurface</item>
+    </style>
+
+    <!-- Trip panel text on the app's surface. -->
+    <style name="RevBaseTripTimeRemaining" parent="MapboxStyleTimeRemaining">
+        <item name="android:textColor">@color/revbase_nav_ink</item>
+    </style>
+    <style name="RevBaseTripDistanceRemaining" parent="MapboxStyleDistanceRemaining">
+        <item name="android:textColor">@color/revbase_nav_ink</item>
+    </style>
+    <style name="RevBaseTripArrivalTime" parent="MapboxStyleEstimatedArrivalTime">
+        <item name="android:textColor">@color/revbase_nav_ink</item>
+    </style>
+
+    <!-- Round map buttons on the app's surface tile. -->
+    <style name="RevBaseRecenterButton">
+        <item name="recenterButtonDrawable">@drawable/revbase_nav_ic_recenter</item>
+        <item name="recenterButtonBackground">@drawable/revbase_nav_button_bg</item>
+        <item name="recenterButtonTextColor">@color/revbase_nav_ink</item>
+    </style>
+    <style name="RevBaseRouteOverviewButton">
+        <item name="overviewButtonDrawable">@drawable/revbase_nav_ic_route_overview</item>
+        <item name="overviewButtonBackground">@drawable/revbase_nav_button_bg</item>
+        <item name="overviewButtonTextColor">@color/revbase_nav_ink</item>
+    </style>
+    <style name="RevBaseSoundButton">
+        <item name="soundButtonMuteDrawable">@drawable/revbase_nav_ic_sound_off</item>
+        <item name="soundButtonUnmuteDrawable">@drawable/revbase_nav_ic_sound_on</item>
+        <item name="soundButtonBackground">@drawable/revbase_nav_button_bg</item>
+        <item name="soundButtonTextColor">@color/revbase_nav_ink</item>
+    </style>
+</resources>

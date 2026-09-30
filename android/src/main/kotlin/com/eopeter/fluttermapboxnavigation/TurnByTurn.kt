@@ -31,8 +31,10 @@ import com.mapbox.maps.Style
 import com.mapbox.maps.plugin.DistanceUnits
 import com.mapbox.maps.plugin.LocationPuck2D
 import com.mapbox.maps.plugin.animation.camera
+import com.mapbox.maps.plugin.attribution.attribution
 import com.mapbox.maps.plugin.gestures.addOnMapClickListener
 import com.mapbox.maps.plugin.locationcomponent.location
+import com.mapbox.maps.plugin.logo.logo
 import com.mapbox.maps.plugin.scalebar.scalebar
 import com.mapbox.navigation.base.TimeFormat
 import com.mapbox.navigation.base.extensions.applyDefaultNavigationOptions
@@ -203,6 +205,14 @@ open class TurnByTurn(
             this.finishNavigation()
         }
 
+        NavigationChrome.apply(this.context, this.binding)
+        this.baseLogoBottom = this.binding.mapView.logo.marginBottom
+        this.baseAttributionBottom = this.binding.mapView.attribution.marginBottom
+        this.baseScaleBarTop = this.binding.mapView.scalebar.marginTop
+        this.binding.tripProgressCard.addOnLayoutChangeListener { _, _, _, _, _, _, _, _, _ ->
+            this.applyOrnamentInsets()
+        }
+
         this.registerObservers()
         MapboxNavigationApp.current()?.startTripSession(withForegroundService = false)
     }
@@ -266,6 +276,13 @@ open class TurnByTurn(
             }
             "routeOverview" -> {
                 this.navigationCamera.requestNavigationCameraToOverview()
+                result.success(true)
+            }
+            "setOrnamentInsets" -> {
+                val args = methodCall.arguments as? Map<*, *>
+                this.ornamentTopDp = (args?.get("top") as? Number)?.toFloat() ?: 0f
+                this.ornamentBottomDp = (args?.get("bottom") as? Number)?.toFloat() ?: 0f
+                this.applyOrnamentInsets()
                 result.success(true)
             }
             "getDistanceRemaining" -> {
@@ -490,11 +507,13 @@ open class TurnByTurn(
         this.binding.soundButton.visibility = View.VISIBLE
         this.binding.routeOverview.visibility = View.VISIBLE
         this.binding.tripProgressCard.visibility = View.VISIBLE
+        this.applyOrnamentInsets()
         if (this.isVoiceInstructionsMuted) {
             this.binding.soundButton.mute()
         } else {
             this.binding.soundButton.unmute()
         }
+        NavigationChrome.describeSound(this.context, this.binding, this.isVoiceInstructionsMuted)
         // Preview is over — clear it AFTER setNavigationRoutes so the empty
         // update is a no-op in the observer and the car surface hands over
         // from the preview lines to the active-guidance line.
@@ -538,8 +557,30 @@ open class TurnByTurn(
         this.binding.routeOverview.visibility = View.INVISIBLE
         this.binding.tripProgressCard.visibility = View.INVISIBLE
         this.binding.maneuverView.visibility = View.INVISIBLE
+        this.applyOrnamentInsets()
         navigation.setRoutesPreview(emptyList())
         PluginUtilities.sendEvent(MapBoxEvents.NAVIGATION_CANCELLED)
+    }
+
+    // Mapbox's logo and attribution (which its terms require to stay
+    // visible) and the scale bar sit on the map's edges, under the host's
+    // Flutter chrome and the trip panel. The host reports how far its chrome
+    // reaches in from the view's top and bottom (setOrnamentInsets); the trip
+    // panel is measured here. RevBase #237.
+    private fun applyOrnamentInsets() {
+        val density = this.context.resources.displayMetrics.density
+        val card = this.binding.tripProgressCard
+        val cardPx = if (card.visibility == View.VISIBLE) card.height.toFloat() else 0f
+        val bottomPx = maxOf(this.ornamentBottomDp * density, cardPx)
+        val topPx = this.ornamentTopDp * density
+        // Runs from the card's layout listener, and a margin write lays the
+        // map out again, so only write what changed.
+        if (bottomPx == this.appliedBottomPx && topPx == this.appliedTopPx) return
+        this.appliedBottomPx = bottomPx
+        this.appliedTopPx = topPx
+        this.binding.mapView.logo.marginBottom = this.baseLogoBottom + bottomPx
+        this.binding.mapView.attribution.marginBottom = this.baseAttributionBottom + bottomPx
+        this.binding.mapView.scalebar.marginTop = this.baseScaleBarTop + topPx
     }
 
     // Banner and trip-progress distances follow the requested units, never
@@ -732,6 +773,15 @@ open class TurnByTurn(
     private var isNavigationRunning = false
     private var isNavigationCanceled = false
 
+    // Ornament insets from the host (dp) and Mapbox's own margins (px).
+    private var ornamentTopDp = 0f
+    private var ornamentBottomDp = 0f
+    private var baseLogoBottom = 0f
+    private var baseAttributionBottom = 0f
+    private var baseScaleBarTop = 0f
+    private var appliedTopPx = 0f
+    private var appliedBottomPx = 0f
+
     /**
      * Bindings to the embedded navigation layout (MapView + component views).
      */
@@ -755,6 +805,7 @@ open class TurnByTurn(
         set(value) {
             field = value
             if (!this::voiceInstructionsPlayer.isInitialized) return
+            NavigationChrome.describeSound(this.context, this.binding, value)
             if (value) {
                 this.binding.soundButton.muteAndExtend(1500L)
                 this.voiceInstructionsPlayer.volume(SpeechVolume(0f))

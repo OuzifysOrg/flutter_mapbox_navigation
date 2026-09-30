@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The app's dark palette (rev_palette.dart): see values/revbase_nav.xml. -->
+<resources>
+    <color name="revbase_nav_surface">#16191C</color>
+    <color name="revbase_nav_ink">#F2F3F5</color>
+    <color name="revbase_nav_outline">#1AFFFFFF</color>
+</resources>
